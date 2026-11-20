@@ -13,7 +13,13 @@
   <img src="https://img.shields.io/badge/Audio-Pure%20Rust%20Opus%20(Zero%20FFmpeg)-90EBA5?style=flat-square" alt="Audio" />
   <img src="https://img.shields.io/badge/3D-RAGE9%20Meshlets%20%2B%20UVs-FF55AF?style=flat-square" alt="3D" />
   <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D6?style=flat-square" alt="Windows" />
+  <img src="https://img.shields.io/badge/Platform-macOS%20(Universal)-111111?style=flat-square&logo=apple" alt="macOS" />
   <img src="https://img.shields.io/badge/License-Source--Available%20(No%20Modifications)-red?style=flat-square" alt="License" />
+</p>
+
+<p align="center">
+  <strong>On Mac? <a href="https://github.com/rpatty-dev/PercyStar/releases/download/v1.0.3/PercyStar_macOS.zip">Download PercyStar for macOS here</a></strong><br />
+  <sub>Universal app (Apple Silicon + Intel), macOS 11+. Unzip, then right-click <code>PercyStar.app</code> &gt; Open the first time (the app is not notarized).</sub>
 </p>
 
 <p align="center">
