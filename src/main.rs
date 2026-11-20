@@ -1084,7 +1084,7 @@ fn app_data_dir() -> Option<PathBuf> {
 }
 
 fn cache_file_path() -> Option<PathBuf> {
-    app_data_dir().map(|d| d.join("scan_cache_v5.tsv"))
+    app_data_dir().map(|d| d.join("scan_cache_v6.tsv"))
 }
 
 fn load_last_folder() -> Option<PathBuf> {
@@ -1560,16 +1560,19 @@ fn scan_single_rpf(path: &PathBuf, progress_state: Option<&Arc<Mutex<ScanState>>
         if let Some(st) = progress_state {
             st.lock().unwrap().header_info = info.clone();
         }
-        let entries: Vec<RpfEntry> = descs.into_iter().map(|d| RpfEntry {
-            source_rpf: path.clone(),
-            rpf_name: rname.clone(),
-            name: format!("tex_{:05}_{}x{}_f{:02x}{}.ttpf", d.idx, d.w, d.h, d.fmt_byte, if d.has_mips { "_mip" } else { "" }),
-            kind: "TTPF",
-            offset: d.byte_off,
-            comp_size: d.alloc_sz,
-            raw_size: d.alloc_sz,
-            tracks: d.idx as u32,
-            chunks: Vec::new(),
+        let entries: Vec<RpfEntry> = descs.into_iter().map(|d| {
+            let fnm = tex::dxgi_info(d.dxgi).map(|x| x.0).unwrap_or("UNK");
+            RpfEntry {
+                source_rpf: path.clone(),
+                rpf_name: rname.clone(),
+                name: format!("tex_{:05}_{}x{}_{fnm}{}.ttpf", d.idx, d.w, d.h, if d.has_mips { "_mip" } else { "" }),
+                kind: "TTPF",
+                offset: d.byte_off,
+                comp_size: d.alloc_sz,
+                raw_size: d.alloc_sz,
+                tracks: d.idx as u32,
+                chunks: Vec::new(),
+            }
         }).collect();
         return Ok((info, entries));
     }
@@ -2198,7 +2201,7 @@ mod tests {
             raw64[blk * 16] = (blk & 0xFF) as u8;
             raw64[blk * 16 + 1] = ((blk >> 8) & 0xFF) as u8;
         }
-        let lin64 = tex::deswizzle_64kb_ttpf(&raw64, 256, 256, 16);
+        let lin64 = tex::deswizzle_64kb_ttpf(&raw64, 256, 256, true, 16);
         assert_eq!(lin64.len(), 65536);
         let mut seen64 = vec![false; 4096];
         for blk in 0..4096 {
@@ -2322,7 +2325,7 @@ mod tests {
                     for off in offs {
                         if off + pad > raw.len() && off != 0 { continue; }
                         let sl = &raw[off..raw.len().min(off + pad)];
-                        let lin = if t64 { tex::deswizzle_64kb_ttpf(sl, d.w, d.h, bpe) } else { tex::deswizzle_4kb_d(sl, d.w, d.h, is_bc, bpe) };
+                        let lin = if t64 { tex::deswizzle_64kb_ttpf(sl, d.w, d.h, is_bc, bpe) } else { tex::deswizzle_4kb_d(sl, d.w, d.h, is_bc, bpe) };
                         let Some(px) = tex::decode_linear_to_rgba(&lin, d.w, d.h, dxgi) else { continue };
                         let mut diff = 0u64;
                         for y in 0..d.h { for x in 1..d.w {
@@ -2366,6 +2369,23 @@ mod tests {
                 }
             }
             assert!(decoded_ok >= 1, "expected at least 1 decoded texture from platform.ttpf");
+        }
+
+        // 1b. Previously unsupported TTPF formats: DXGI 28 (RGBA8), 54 (R16F), 61 (R8), 65 (A8), 87 (BGRA8), 96 (BC6H_SF16)
+        for (rel, idx, exp_dxgi) in [
+            ("data\\ttdb\\graphics\\ttdb_graphics.ttpf", 1usize, 28u8),
+            ("data\\ttdb\\graphics\\ttdb_graphics.ttpf", 563usize, 87u8),
+            ("data\\ttdb\\maps\\ttdb_maps_0_7.ttpf", 605usize, 54u8),
+            ("data\\ttdb\\interiors\\ttdb_interiors_0_3.ttpf", 1984usize, 65u8),
+            ("data\\ttdb\\vfx\\ttdb_vfx.ttpf", 608usize, 61u8),
+            ("data\\ttdb\\lighting\\lighting.ttpf", 334usize, 96u8),
+        ] {
+            let p = base.join(rel);
+            if p.exists() {
+                let t = decode_ttpf_texture(&p, idx).unwrap_or_else(|e| panic!("{rel} #{idx}: {e}"));
+                assert_eq!(t.dxgi, exp_dxgi);
+                assert_eq!(t.pixels.len(), t.w * t.h);
+            }
         }
 
         // 2. TXD native scan + decode from textures.rpf
