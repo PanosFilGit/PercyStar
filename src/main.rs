@@ -1,9 +1,14 @@
 mod awc;
 mod model3d;
+mod rdna2;
 mod tex;
 use model3d::{
     Mesh3D, decode_rage9_model_from_rpf, extract_0drpz_mesh, extract_rage9_model_name,
     is_vehicle_virtual, is_zlib_head, parse_obj, probe_large_rage9_model_in_buf, render_mesh3d_viewport,
+};
+use rdna2::{
+    Ps09Cache, ShaderStage, format_gfx103_disasm, format_spirv_abi_summary, lift_to_hlsl,
+    lift_to_spirv,
 };
 use tex::{
     DecodedTexture, build_dds_dx10, decode_0drpz_text, decode_navmesh_from_rpf, decode_rbf0,
@@ -160,6 +165,15 @@ enum AppTab {
     #[default]
     Explorer,
     ModelViewer,
+    Shaders,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum ShaderViewMode {
+    #[default]
+    Asm,
+    Hlsl,
+    SpirvAbi,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -627,6 +641,14 @@ struct Rpf9App {
     mv_view: Vec<usize>,
     mv_view_key: Option<(u64, ModelCat, String, bool)>,
     mv_rng: u64,
+    // dedicated RDNA2 (GFX10.3) PS\x00\x09 Shader Disassembler & HLSL/SPIR-V Lifter tab
+    sh_cache: Option<Ps09Cache>,
+    sh_status: String,
+    sh_stage_filter: Option<ShaderStage>,
+    sh_search: String,
+    sh_selected: Option<usize>,
+    sh_mode: ShaderViewMode,
+    sh_cached_text: (Option<(usize, ShaderViewMode)>, String),
 }
 
 impl Rpf9App {
@@ -681,6 +703,13 @@ impl Rpf9App {
             mv_view: Vec::new(),
             mv_view_key: None,
             mv_rng: 0x9E37_79B9_7F4A_7C15,
+            sh_cache: None,
+            sh_status: String::new(),
+            sh_stage_filter: None,
+            sh_search: String::new(),
+            sh_selected: None,
+            sh_mode: ShaderViewMode::Asm,
+            sh_cached_text: (None, String::new()),
         };
         load_ui_state(&mut app);
         spawn_update_check(Arc::clone(&app.update), cc.egui_ctx.clone());
@@ -1667,6 +1696,277 @@ impl Rpf9App {
             });
     }
 
+    fn load_ps09_path(&mut self, path: &Path) {
+        match load_ps09_from_path(path) {
+            Ok(cache) => {
+                let st_msg = format!(
+                    "Loaded PS\\x00\\x09 ({}, drv {}): {} shaders · {} Gfx PSOs · {} Compute PSOs",
+                    cache.header.id,
+                    cache.header.driver,
+                    cache.shaders.len(),
+                    cache.header.graphics_pso_count,
+                    cache.header.compute_pso_count,
+                );
+                self.sh_cache = Some(cache);
+                self.sh_selected = Some(0);
+                self.sh_cached_text = (None, String::new());
+                self.sh_status = st_msg;
+            }
+            Err(e) => {
+                self.sh_status = format!("PS\\x00\\x09 load error: {e}");
+            }
+        }
+    }
+
+    fn find_local_shaders_dir(&self) -> Option<PathBuf> {
+        let mut dirs = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(d) = exe.parent() {
+                dirs.push(d.join("shaders_rpf").join("zlib"));
+                dirs.push(d.join("shaders.rpf"));
+            }
+        }
+        dirs.push(PathBuf::from(r"F:\Ext6\shaders_rpf\zlib"));
+        dirs.into_iter().find(|p| p.exists())
+    }
+
+    fn render_shader_tab(&mut self, ctx: &egui::Context) {
+        let local_sh = self.find_local_shaders_dir();
+        egui::SidePanel::left("sh_sidebar")
+            .default_width(355.0)
+            .frame(egui::Frame::new().fill(Color32::from_rgb(20, 13, 31)).inner_margin(10.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("RDNA2 (GFX10.3) SHADER LIFTER")
+                        .size(12.0)
+                        .strong()
+                        .color(Color32::from_rgb(72, 210, 255)),
+                );
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(lp) = local_sh {
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new("★ Load Local PS09").color(Color32::BLACK).strong())
+                                    .fill(Color32::from_rgb(255, 168, 28)),
+                            )
+                            .clicked()
+                        {
+                            self.load_ps09_path(&lp);
+                        }
+                    }
+                    if ui.button("Open shaders.rpf / .ps09").clicked() {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .add_filter("RAGE 9 Shaders", &["rpf", "ps09", "bin"])
+                            .pick_file()
+                        {
+                            self.load_ps09_path(&p);
+                        }
+                    }
+                    if ui.button("Open zlib Dir...").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                            self.load_ps09_path(&p);
+                        }
+                    }
+                });
+                if !self.sh_status.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(&self.sh_status).size(10.5).color(Color32::from_rgb(165, 225, 185)));
+                }
+                ui.add_space(6.0);
+
+                // Stage filter pills
+                let stage_counts = if let Some(ref c) = self.sh_cache {
+                    let (mut cs, mut ps, mut vs, mut ngg, mut rt) = (0usize, 0, 0, 0, 0);
+                    for s in &c.shaders {
+                        match s.stage {
+                            ShaderStage::Compute => cs += 1,
+                            ShaderStage::Pixel => ps += 1,
+                            ShaderStage::Vertex => vs += 1,
+                            ShaderStage::MeshNgg => ngg += 1,
+                            ShaderStage::RayTracing => rt += 1,
+                            ShaderStage::Unknown => {}
+                        }
+                    }
+                    (c.shaders.len(), cs, ps, vs, ngg, rt)
+                } else {
+                    (0, 0, 0, 0, 0, 0)
+                };
+                ui.horizontal_wrapped(|ui| {
+                    for (opt, lbl, cnt) in [
+                        (None, "All", stage_counts.0),
+                        (Some(ShaderStage::Pixel), "PS", stage_counts.2),
+                        (Some(ShaderStage::Vertex), "VS", stage_counts.3),
+                        (Some(ShaderStage::Compute), "CS", stage_counts.1),
+                        (Some(ShaderStage::MeshNgg), "NGG", stage_counts.4),
+                        (Some(ShaderStage::RayTracing), "RT", stage_counts.5),
+                    ] {
+                        let active = self.sh_stage_filter == opt;
+                        let btn = egui::Button::new(
+                            RichText::new(format!("{lbl} ({cnt})"))
+                                .size(11.0)
+                                .strong()
+                                .color(if active { Color32::BLACK } else { Color32::from_rgb(220, 210, 240) }),
+                        )
+                        .fill(if active { Color32::from_rgb(72, 210, 255) } else { Color32::from_rgb(36, 22, 54) });
+                        if ui.add(btn).clicked() {
+                            self.sh_stage_filter = opt;
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.sh_search)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Filter by #index, PSO hash, stage, or threads..."),
+                );
+                ui.add_space(6.0);
+
+                if let Some(ref cache) = self.sh_cache {
+                    let q = self.sh_search.trim().to_ascii_lowercase();
+                    let filtered: Vec<usize> = cache
+                        .shaders
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| {
+                            let st_ok = self.sh_stage_filter.map_or(true, |f| s.stage == f);
+                            if !st_ok {
+                                return false;
+                            }
+                            if q.is_empty() {
+                                return true;
+                            }
+                            let hay = format!(
+                                "#{} {} {:016x} {}b {}bind",
+                                s.index,
+                                s.stage.tag(),
+                                s.pso_hash,
+                                s.code_size,
+                                s.bindings.len()
+                            )
+                            .to_ascii_lowercase();
+                            hay.contains(&q)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(
+                        ui,
+                        20.0,
+                        filtered.len(),
+                        |ui, range| {
+                            for ri in range {
+                                let idx = filtered[ri];
+                                let s = &cache.shaders[idx];
+                                let sel = self.sh_selected == Some(idx);
+                                let col = match s.stage {
+                                    ShaderStage::RayTracing => Color32::from_rgb(255, 72, 165),
+                                    ShaderStage::MeshNgg => Color32::from_rgb(255, 168, 28),
+                                    ShaderStage::Compute => Color32::from_rgb(72, 210, 255),
+                                    ShaderStage::Pixel => Color32::from_rgb(95, 235, 145),
+                                    ShaderStage::Vertex => Color32::from_rgb(205, 145, 255),
+                                    ShaderStage::Unknown => Color32::from_rgb(170, 170, 190),
+                                };
+                                let lbl = format!(
+                                    "[{}] #{:05} · {:4}B · {}i · {}b",
+                                    s.stage.tag(),
+                                    s.index,
+                                    s.code_size,
+                                    s.insn_count,
+                                    s.bindings.len()
+                                );
+                                if ui.selectable_label(sel, RichText::new(lbl).monospace().size(11.5).color(col)).clicked() {
+                                    self.sh_selected = Some(idx);
+                                }
+                            }
+                        },
+                    );
+                }
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(Color32::from_rgb(14, 9, 24)).inner_margin(12.0))
+            .show(ctx, |ui| {
+                if let (Some(ref cache), Some(sel_idx)) = (&self.sh_cache, self.sh_selected) {
+                    if let Some(entry) = cache.shaders.get(sel_idx) {
+                        let code = cache.shader_bytes(entry);
+                        ui.horizontal_wrapped(|ui| {
+                            for (mode, lbl) in [
+                                (ShaderViewMode::Asm, "GFX10.3 ASM"),
+                                (ShaderViewMode::Hlsl, "Lifted HLSL (SM 6.6)"),
+                                (ShaderViewMode::SpirvAbi, "SPIR-V 1.5 / SGPR ABI"),
+                            ] {
+                                let active = self.sh_mode == mode;
+                                let btn = egui::Button::new(
+                                    RichText::new(lbl)
+                                        .size(12.0)
+                                        .strong()
+                                        .color(if active { Color32::BLACK } else { Color32::from_rgb(225, 215, 240) }),
+                                )
+                                .fill(if active { Color32::from_rgb(255, 168, 28) } else { Color32::from_rgb(38, 24, 58) });
+                                if ui.add(btn).clicked() {
+                                    self.sh_mode = mode;
+                                }
+                            }
+                            ui.separator();
+                            if ui.button("Export .hlsl").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_file_name(format!("shader_{:05}_{}.hlsl", entry.index, entry.stage.tag()))
+                                    .save_file()
+                                {
+                                    let _ = fs::write(&p, lift_to_hlsl(entry, code));
+                                }
+                            }
+                            if ui.button("Export .spv").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_file_name(format!("shader_{:05}_{}.spv", entry.index, entry.stage.tag()))
+                                    .save_file()
+                                {
+                                    let _ = fs::write(&p, lift_to_spirv(entry, code));
+                                }
+                            }
+                            if ui.button("Export .asm").clicked() {
+                                if let Some(p) = rfd::FileDialog::new()
+                                    .set_file_name(format!("shader_{:05}_{}.asm", entry.index, entry.stage.tag()))
+                                    .save_file()
+                                {
+                                    let _ = fs::write(&p, format_gfx103_disasm(entry, code));
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
+                        let key = Some((sel_idx, self.sh_mode));
+                        if self.sh_cached_text.0 != key {
+                            let txt = match self.sh_mode {
+                                ShaderViewMode::Asm => format_gfx103_disasm(entry, code),
+                                ShaderViewMode::Hlsl => lift_to_hlsl(entry, code),
+                                ShaderViewMode::SpirvAbi => format_spirv_abi_summary(entry, code),
+                            };
+                            self.sh_cached_text = (key, txt);
+                        }
+                        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.sh_cached_text.1.as_str())
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
+                        return;
+                    }
+                }
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        RichText::new(
+                            "Click '★ Load Local PS09' or 'Open shaders.rpf / .ps09' on the left to inspect all 21,522 GTA VI AMD RDNA2 (GFX10.3) shaders.",
+                        )
+                        .size(13.5)
+                        .color(Color32::from_rgb(185, 180, 210)),
+                    );
+                });
+            });
+    }
+
     fn export_entries(&self, indices: &[usize]) {
         let Some(out_dir) = rfd::FileDialog::new().pick_folder() else { return };
         let entries: Vec<RpfEntry> = {
@@ -2455,8 +2755,12 @@ impl eframe::App for Rpf9App {
                 ui.label(RichText::new("RPF9").size(13.0).strong().color(Color32::from_rgb(255, 72, 165)));
                 ui.label(RichText::new(format!("v{APP_VERSION}")).size(11.5).color(Color32::from_rgb(165, 145, 195)));
                 ui.add_space(10.0);
-                // Top-level mode tabs: Explorer | Model Viewer
-                for (tab_id, label) in [(AppTab::Explorer, "Explorer"), (AppTab::ModelViewer, "Model Viewer")] {
+                // Top-level mode tabs: Explorer | Model Viewer | Shaders (RDNA2)
+                for (tab_id, label) in [
+                    (AppTab::Explorer, "Explorer"),
+                    (AppTab::ModelViewer, "Model Viewer"),
+                    (AppTab::Shaders, "Shaders (RDNA2)"),
+                ] {
                     let active = self.tab == tab_id;
                     let btn = egui::Button::new(
                         RichText::new(label)
@@ -2470,6 +2774,13 @@ impl eframe::App for Rpf9App {
                         if tab_id == AppTab::ModelViewer {
                             self.stop_bink_player();
                             self.show_3d = true;
+                        } else if tab_id == AppTab::Shaders {
+                            self.stop_bink_player();
+                            if self.sh_cache.is_none() {
+                                if let Some(lp) = self.find_local_shaders_dir() {
+                                    self.load_ps09_path(&lp);
+                                }
+                            }
                         }
                     }
                 }
@@ -2553,6 +2864,8 @@ impl eframe::App for Rpf9App {
 
         if self.tab == AppTab::ModelViewer {
             self.render_model_viewer_tab(ctx, media_loading, &media_status);
+        } else if self.tab == AppTab::Shaders {
+            self.render_shader_tab(ctx);
         } else {
         egui::SidePanel::left("tree").default_width(195.0).frame(egui::Frame::new().fill(Color32::from_rgb(18, 12, 28)).inner_margin(8.0)).show(ctx, |ui| {
             self.refresh_view();
@@ -3234,12 +3547,118 @@ fn dump_textures_cli(src_path: &PathBuf, out_dir: &PathBuf, limit: usize) {
     eprintln!("DONE: Exported {ok} PNGs (bcpack={bcpk}, fail={fail}) to {}", out_dir.display());
 }
 
+fn load_ps09_from_path(path: &Path) -> Result<Ps09Cache, String> {
+    if path.is_dir() {
+        let mut bins: Vec<PathBuf> = fs::read_dir(path)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("bin")).unwrap_or(false))
+            .collect();
+        bins.sort();
+        if bins.is_empty() {
+            return Err("No .bin chunks found in directory".into());
+        }
+        let mut raw = Vec::with_capacity(bins.len() * 65536);
+        for b in bins {
+            raw.extend_from_slice(&fs::read(&b).map_err(|e| e.to_string())?);
+        }
+        Ps09Cache::parse(raw).ok_or_else(|| "Directory chunks did not start with PS\\x00\\x09".into())
+    } else {
+        let data = fs::read(path).map_err(|e| e.to_string())?;
+        if data.starts_with(b"PS\x00\x09") {
+            return Ps09Cache::parse(data).ok_or_else(|| "Invalid PS\\x00\\x09 stream".into());
+        }
+        // Decompress all 64KB zlib chunks starting from the first PS\x00\x09 stream inside shaders.rpf
+        let mut raw = Vec::new();
+        let mut pos = 0usize;
+        let mut found = false;
+        while pos + 2 < data.len() {
+            if data[pos] == 0x78 && matches!(data[pos + 1], 0x9c | 0xda | 0x01) {
+                let mut dec = Decompress::new(true);
+                let mut out = vec![0u8; 65536];
+                if let Ok(Status::StreamEnd | Status::Ok) = dec.decompress(&data[pos..], &mut out, FlushDecompress::Finish) {
+                    let produced = dec.total_out() as usize;
+                    if produced >= 64 {
+                        if !found && out[..produced].starts_with(b"PS\x00\x09") {
+                            found = true;
+                        }
+                        if found {
+                            raw.extend_from_slice(&out[..produced]);
+                            pos += (dec.total_in() as usize).max(2);
+                            continue;
+                        }
+                    }
+                }
+            }
+            pos += 1;
+        }
+        if !found {
+            return Err("No PS\\x00\\x09 zlib stream found in file".into());
+        }
+        Ps09Cache::parse(raw).ok_or_else(|| "Decompressed PS\\x00\\x09 stream failed validation".into())
+    }
+}
+
+fn disasm_shaders_cli(src: &Path, out_dir: &Path, limit: usize) {
+    let cache = match load_ps09_from_path(src) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to load PS09 from {}: {e}", src.display());
+            return;
+        }
+    };
+    let _ = fs::create_dir_all(out_dir);
+    println!(
+        "Loaded PS\\x00\\x09 ({}, drv {}): {} shaders, {} Gfx PSOs, {} Compute PSOs",
+        cache.header.id,
+        cache.header.driver,
+        cache.shaders.len(),
+        cache.header.graphics_pso_count,
+        cache.header.compute_pso_count
+    );
+    let mut csv = String::from("index,stage,pso_hash,code_off,code_size,insns,bindings,has_rt,has_ngg,numthreads\n");
+    let (mut cs, mut ps, mut vs, mut ngg, mut rt) = (0usize, 0, 0, 0, 0);
+    for s in &cache.shaders {
+        match s.stage {
+            ShaderStage::Compute => cs += 1,
+            ShaderStage::Pixel => ps += 1,
+            ShaderStage::Vertex => vs += 1,
+            ShaderStage::MeshNgg => ngg += 1,
+            ShaderStage::RayTracing => rt += 1,
+            ShaderStage::Unknown => {}
+        }
+        let nt = s.num_threads.map(|[x, y, z]| format!("{x}x{y}x{z}")).unwrap_or_default();
+        csv.push_str(&format!(
+            "{},{},0x{:016x},0x{:08x},{},{},{},{},{},{}\n",
+            s.index, s.stage.tag(), s.pso_hash, s.code_offset, s.code_size,
+            s.insn_count, s.bindings.len(), s.has_rt as u8, s.has_ngg as u8, nt
+        ));
+    }
+    let _ = fs::write(out_dir.join("shaders_index.csv"), csv);
+    println!("Stage totals: PS={ps} VS={vs} CS={cs} NGG/Mesh={ngg} RT_BVH64={rt}");
+    let dump_n = if limit == 0 { 25.min(cache.shaders.len()) } else { limit.min(cache.shaders.len()) };
+    for s in cache.shaders.iter().take(dump_n) {
+        let code = cache.shader_bytes(s);
+        let stem = format!("sh_{:05}_{}", s.index, s.stage.tag());
+        let _ = fs::write(out_dir.join(format!("{stem}.asm")), format_gfx103_disasm(s, code));
+        let _ = fs::write(out_dir.join(format!("{stem}.hlsl")), lift_to_hlsl(s, code));
+        let _ = fs::write(out_dir.join(format!("{stem}.spv")), lift_to_spirv(s, code));
+    }
+    println!("Wrote shaders_index.csv + {dump_n} shaders (.asm/.hlsl/.spv) to {}", out_dir.display());
+}
+
 fn main() -> eframe::Result<()> {
     // remove leftover old exe from previous self update
     if let Ok(cur) = std::env::current_exe() {
         let _ = fs::remove_file(cur.with_extension("exe.old"));
     }
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 4 && args[1] == "--disasm-shaders" {
+        let lim = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(25);
+        disasm_shaders_cli(&PathBuf::from(&args[2]), &PathBuf::from(&args[3]), lim);
+        return Ok(());
+    }
     if args.len() >= 4 && args[1] == "--dump-textures" {
         let lim = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
         dump_textures_cli(&PathBuf::from(&args[2]), &PathBuf::from(&args[3]), lim);
