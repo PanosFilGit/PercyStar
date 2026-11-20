@@ -476,7 +476,9 @@ pub fn decode_linear_to_rgba(lin: &[u8], w: usize, h: usize, dxgi: u8) -> Option
 pub fn build_dds_dx10(w: usize, h: usize, dxgi: u8, lin: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(148 + lin.len());
     out.extend_from_slice(b"DDS ");
-    for v in [124u32, 0x1007, h as u32, w as u32, lin.len() as u32, 1, 1] {
+    let compressed = dxgi_info(dxgi).is_some_and(|(_, bc, _)| bc);
+    let (flags, pitch) = if compressed { (0x81007, lin.len()) } else { (0x100f, lin.len() / h.max(1)) };
+    for v in [124u32, flags, h as u32, w as u32, pitch as u32, 0, 1] {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out.extend_from_slice(&[0u8; 44]);
@@ -497,12 +499,17 @@ pub fn build_dds_dx10(w: usize, h: usize, dxgi: u8, lin: &[u8]) -> Vec<u8> {
 }
 
 pub fn export_texture_png(tex: &DecodedTexture, path: &Path) -> Result<(), String> {
-    let mut rgba = Vec::with_capacity(tex.w * tex.h * 4);
-    for c in &tex.pixels {
-        rgba.extend_from_slice(&c.to_srgba_unmultiplied());
-    }
-    image::save_buffer(path, &rgba, tex.w as u32, tex.h as u32, image::ColorType::Rgba8)
-        .map_err(|e| format!("PNG save error: {e}"))
+    use image::ImageEncoder;
+    crate::archive::write_new(path, |file| {
+        let mut rgba = Vec::with_capacity(tex.pixels.len() * 4);
+        for pixel in &tex.pixels { rgba.extend_from_slice(&pixel.to_srgba_unmultiplied()); }
+        image::codecs::png::PngEncoder::new(file).write_image(&rgba, tex.w as u32, tex.h as u32, image::ExtendedColorType::Rgba8)
+            .map_err(|e| e.to_string())
+    })
+}
+
+pub fn export_texture_dds(tex: &DecodedTexture, path: &Path) -> Result<(), String> {
+    crate::archive::write_bytes_new(path, build_dds_dx10(tex.w, tex.h, tex.dxgi, &tex.raw_dds_payload))
 }
 
 /// Extract ALL textures from a pgDictionary<grcTexture> inside virtual `v` + physical `p`.
@@ -738,151 +745,46 @@ pub struct TtpfTexMeta {
     pub alloc_sz: u64,
 }
 
+pub use crate::rds::TtpfIndex;
+
 pub fn scan_ttpf_descriptors(path: &Path) -> Result<(String, Vec<TtpfTexMeta>), String> {
-    let mut f = File::open(path).map_err(|e| e.to_string())?;
-    let sz = f.metadata().map_err(|e| e.to_string())?.len();
-    let mut hdr = [0u8; 24];
-    f.read_exact(&mut hdr).map_err(|e| e.to_string())?;
-    if &hdr[..4] != b"RDS5" {
-        return Err("Not an RDS5 TTPF file".into());
-    }
-    let n_chunks = ru32(&hdr, 4);
-    let tot_uncomp = ru32(&hdr, 8) as u64;
-    let hdr_pages = ru32(&hdr, 16) as u64;
-    let etpf_off = hdr_pages * 0x100;
-
-    f.seek(SeekFrom::Start(etpf_off)).map_err(|e| e.to_string())?;
-    let mut ehdr = [0u8; 16];
-    f.read_exact(&mut ehdr).map_err(|e| e.to_string())?;
-    if &ehdr[..4] != b"ETPF" {
-        return Err(format!("Missing ETPF header at 0x{etpf_off:x}"));
-    }
-    let tex_count = ru32(&ehdr, 8) as usize;
-    let mut recs = vec![0u8; tex_count * 16];
-    f.read_exact(&mut recs).map_err(|e| e.to_string())?;
-
-    let mut out = Vec::with_capacity(tex_count);
-    for i in 0..tex_count {
-        let u0 = ru32(&recs, i * 16);
-        let u1 = ru32(&recs, i * 16 + 4);
-        let u2 = ru32(&recs, i * 16 + 8);
-        let w = ((u0 & 0x3FFF) + 1) as usize;
-        let h = (((u0 >> 14) & 0x3FFF) + 1) as usize;
-        let fmt_byte = (u1 & 0xFF) as u8;
-        // Verified 100.00% across all 357,115 textures in all 57 .ttpf files:
-        // ETPF u1 bits 3..9 ((u1 >> 3) & 0x7F) is the exact Microsoft DXGI_FORMAT enum!
-        let dxgi = ((u1 >> 3) & 0x7F) as u8;
-        let has_mips = (u1 >> 24) > 0;
-        let page4k = (u2 & 0x000F_FFFF) as u64;
-        out.push(TtpfTexMeta { idx: i, w, h, fmt_byte, dxgi, has_mips, byte_off: page4k * 0x1000, alloc_sz: 0 });
-    }
-    let mut offs: Vec<u64> = out.iter().map(|d| d.byte_off).collect();
-    offs.sort_unstable();
-    offs.dedup();
-    let mut nxt: HashMap<u64, u64> = HashMap::new();
-    for w2 in offs.windows(2) {
-        nxt.insert(w2[0], w2[1]);
-    }
-    for d in &mut out {
-        let (_, is_bc, bpe) = dxgi_info(d.dxgi).unwrap_or(("BC7_UNORM", true, 16));
-        let ew = if is_bc { (d.w + 3) / 4 } else { d.w }.max(1);
-        let eh = if is_bc { (d.h + 3) / 4 } else { d.h }.max(1);
-        let est = ((ew * eh * bpe) as u64).max(0x10000);
-        d.alloc_sz = nxt.get(&d.byte_off).copied().unwrap_or((d.byte_off + est).min(tot_uncomp)).saturating_sub(d.byte_off).max(0x1000);
-    }
-    let info = format!("RDS5/ETPF · {sz} B · {n_chunks} chunks · {tex_count} textures");
-    Ok((info, out))
+    let ix = ttpf_index(path)?;
+    if let Some(e) = &ix.descriptor_error { return Err(e.clone()); }
+    Ok((ix.info(), ix.descs.clone()))
 }
-
-/// Exact virtual layout of every RDS5 chunk, straight from the chunk table (no inflating needed).
-/// Entry i encodes chunk i's virtual END as (hi & 0xFFFFF) * 16KB + (lo >> 30) * 4KB,
-/// and (lo >> 26) & 0xF encodes the NEXT chunk's codec (0=RAW, 1..7=BCPack BC1..BC7, 8=ZLIB).
-pub struct TtpfIndex {
-    pub descs: Vec<TtpfTexMeta>,
-    /// (file_start, file_end, virt_start, virt_len, codec)
-    chunks: Vec<(u64, u64, u64, u64, u8)>,
-}
-
-static TTPF_INDEX: std::sync::OnceLock<std::sync::Mutex<HashMap<std::path::PathBuf, std::sync::Arc<TtpfIndex>>>> = std::sync::OnceLock::new();
 
 pub fn ttpf_index(path: &Path) -> Result<std::sync::Arc<TtpfIndex>, String> {
-    let map = TTPF_INDEX.get_or_init(Default::default);
-    if let Some(ix) = map.lock().unwrap().get(path) {
-        return Ok(ix.clone());
-    }
-    let (_, descs) = scan_ttpf_descriptors(path)?;
-    let mut f = File::open(path).map_err(|e| e.to_string())?;
-    let mut hdr = [0u8; 24];
-    f.read_exact(&mut hdr).map_err(|e| e.to_string())?;
-    let n_chunks = ru32(&hdr, 4) as usize;
-    let etpf_off = ru32(&hdr, 16) as u64 * 0x100;
-    let mut tbl = vec![0u8; n_chunks * 8];
-    f.read_exact(&mut tbl).map_err(|e| e.to_string())?;
-
-    let mut chunks = Vec::with_capacity(n_chunks);
-    let (mut prev_c, mut vstart, mut cur_codec) = (etpf_off, 0u64, 0u8);
-    for i in 0..n_chunks {
-        let lo = ru32(&tbl, i * 8);
-        let hi = ru32(&tbl, i * 8 + 4);
-        let cend = (lo & 0x03FF_FFFF) as u64 * 0x100;
-        let next_codec = ((lo >> 26) & 0xF) as u8;
-        let r = (lo >> 30) as u64;
-        let vend = (hi & 0x000F_FFFF) as u64 * 0x4000 + r * 0x1000;
-        if cend > prev_c && vend > vstart {
-            chunks.push((prev_c, cend, vstart, vend - vstart, cur_codec));
-            vstart = vend;
+    // Bulk texture exports keep this index alive. A new session opens a fresh file handle.
+    type Cache = Option<(std::path::PathBuf, std::sync::Weak<TtpfIndex>)>;
+    static LAST: std::sync::OnceLock<std::sync::Mutex<Cache>> = std::sync::OnceLock::new();
+    let cache = LAST.get_or_init(Default::default);
+    if let Some((p, weak)) = &*cache.lock().map_err(|_| "Index cache unavailable")? {
+        if p == path {
+            if let Some(ix) = weak.upgrade() { return Ok(ix); }
         }
-        prev_c = cend;
-        cur_codec = next_codec;
     }
-    let ix = std::sync::Arc::new(TtpfIndex { descs, chunks });
-    map.lock().unwrap().insert(path.to_path_buf(), ix.clone());
+    let src = crate::archive::Source::open(path)?;
+    let ix = std::sync::Arc::new(TtpfIndex::read(src)?);
+    *cache.lock().map_err(|_| "Index cache unavailable")? = Some((path.into(), std::sync::Arc::downgrade(&ix)));
     Ok(ix)
 }
 
-/// Read `len` bytes of the RDS5 virtual stream starting at `off`, inflating only overlapping chunks.
-pub fn ttpf_read_virtual(path: &Path, ix: &TtpfIndex, off: u64, len: usize) -> Result<Vec<u8>, String> {
-    let end = off + len as u64;
-    let mut f = File::open(path).map_err(|e| e.to_string())?;
-    let mut out_buf = vec![0u8; len];
-    let mut covered = 0usize;
-    let mut dec = Decompress::new(true);
-    let first = ix.chunks.partition_point(|c| c.2 + c.3 <= off);
-    for &(cs, ce, vs, vl, codec) in &ix.chunks[first..] {
-        if vs >= end { break; }
-        let mut ch = vec![0u8; (ce - cs) as usize];
-        f.seek(SeekFrom::Start(cs)).map_err(|e| e.to_string())?;
-        f.read_exact(&mut ch).map_err(|e| e.to_string())?;
-        let data = if is_zlib_head(&ch) {
-            let mut out = Vec::with_capacity(vl as usize);
-            dec.reset(true);
-            let _ = dec.decompress_vec(&ch, &mut out, FlushDecompress::Finish); // partial output is still usable
-            out
-        } else if ch.len() as u64 == vl {
-            ch
-        } else {
-            let mode = match codec {
-                1 => "BC1", 2 => "BC2", 3 => "BC3", 4 => "BC4", 5 => "BC5", 6 => "BC6H", 7 => "BC7", _ => "HW",
-            };
-            return Err(format!("Texture uses Xbox Series X hardware BCPack ({mode}) — ASIC-only compression (not decodable on PC)"));
-        };
-        let s0 = vs.max(off);
-        let s1 = (vs + data.len() as u64).min(end);
-        if s1 > s0 {
-            out_buf[(s0 - off) as usize..(s1 - off) as usize].copy_from_slice(&data[(s0 - vs) as usize..(s1 - vs) as usize]);
-            covered += (s1 - s0) as usize;
-        }
-    }
-    if covered == 0 {
-        return Err("Texture data not found in zlib chunks (likely BCPack)".into());
-    }
-    Ok(out_buf)
+#[cfg(test)]
+pub fn ttpf_read_virtual(_path: &Path, ix: &TtpfIndex, off: u64, len: usize) -> Result<Vec<u8>, String> {
+    ix.read_virtual(off, len)
 }
 
 /// Decode a single texture by descriptor index from a `.ttpf` archive.
 pub fn decode_ttpf_texture(path: &Path, tex_idx: usize) -> Result<DecodedTexture, String> {
     let ix = ttpf_index(path)?;
+    decode_indexed_texture(&ix, tex_idx)
+}
+
+pub fn decode_indexed_texture(ix: &TtpfIndex, tex_idx: usize) -> Result<DecodedTexture, String> {
     let d = ix.descs.get(tex_idx).ok_or("Texture index out of range")?;
+    if d.w > 8192 || d.h > 8192 || d.w * d.h > 8 * 1024 * 1024 {
+        return Err("Texture exceeds the 8-megapixel or 8192-pixel side limit".into());
+    }
 
     let (fmt_name, is_bc, bpe) = dxgi_info(d.dxgi)
         .ok_or_else(|| format!("Unsupported DXGI format {} (fmt_byte=0x{:02x})", d.dxgi, d.fmt_byte))?;
@@ -904,12 +806,18 @@ pub fn decode_ttpf_texture(path: &Path, tex_idx: usize) -> Result<DecodedTexture
         d.byte_off
     };
 
-    let raw_tex = ttpf_read_virtual(path, &ix, mip0_off, mip0_padded)?;
+    if mip0_padded as u64 > d.alloc_sz {
+        return Err("Texture surface exceeds its indexed allocation".into());
+    }
+    let raw_tex = ix.read_virtual(mip0_off, mip0_padded)?;
     let lin = if use_64k {
         deswizzle_64kb_ttpf(&raw_tex, d.w, d.h, is_bc, bpe)
     } else {
         deswizzle_4kb_d(&raw_tex, d.w, d.h, is_bc, bpe)
     };
+    if matches!(d.dxgi, 95 | 96) && lin.chunks_exact(16).any(|block| block[0] & 0x1f == 0x0f) {
+        return Err("BC6H mode 15 preview is unsupported by the current pixel decoder".into());
+    }
     let pixels = decode_linear_to_rgba(&lin, d.w, d.h, d.dxgi)
         .ok_or_else(|| format!("Pixel decode failed for {fmt_name} ({}x{})", d.w, d.h))?;
     Ok(DecodedTexture {

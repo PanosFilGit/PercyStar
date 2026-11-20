@@ -5,14 +5,37 @@
 <h1 align="center">PercyStar</h1>
 
 <p align="center">
-  <strong>Zero-dependency native Rust RPF9 (<code>9FPR</code>) &amp; TTPF (<code>RDS5</code>/<code>ETPF</code>) explorer — native Xbox Series X <code>PS\x00\x09</code> AMD RDNA2 (GFX10.3) Shader Disassembler &amp; HLSL/SPIR-V Lifter, dedicated 10-category RAGE 9 3D Model Viewer, 100% RDNA2 texture decoder (all 20 DXGI formats), native <code>0DRPz</code>/<code>RBF0</code>/<code>GFx</code> UI &amp; text decoders, <code>CNavMesh</code> 3D viewer, pure-Rust <code>ADAT</code> Opus audio, and docked D3D11 Bink2 player</strong>
+  <strong>A read-only RAGE archive browser, asset viewer and extractor. This fork develops the OpenIV-style archive workflow inside PercyStar's native Rust desktop interface.</strong>
 </p>
+
+## Open an archive on Windows
+
+Install stable Rust and the Visual Studio C++ Build Tools with a Windows SDK, then run the following in PowerShell.
+
+```powershell
+git clone https://github.com/PanosFilGit/PercyStar.git
+cd PercyStar
+cargo build --release --locked
+cargo test --release --locked
+.\target\release\PercyStar.exe
+```
+
+In **Archives**, choose **Open folder** to browse a game directory or **Open archive** to open one file. Select a texture for its preview and PNG or DDS export. Select **Data records** to inspect and extract the decoded bytes of an indexed record. **View index bytes** jumps to its on-disk metadata. You can also drop a file or folder onto the window.
+
+| Input | Indexed browser | Evidence in this fork |
+| --- | --- | --- |
+| RDS5 / ETPF | Indexed data records, supported texture previews, single-level PNG and DDS exports | One real 1.76 GB archive. Texture 0 and record 1 have independent decoder matches. |
+| RPF0 | Named folders and files, stored data and raw DEFLATE extraction | Generated fixtures and a public format implementation. |
+| RPF9 | Header and paged hex, plus an explicit embedded-asset search | Real header sample. Its directory layout remains unresolved. |
+| Other signatures | Paged hex inspection | Further RPF versions need individual readers. |
+
+**Asset search**, **Model Viewer**, and **Shaders** retain PercyStar's specialized research tools. Signature-search results have a different evidence basis from indexed directory entries. Build the fork from source for the Archives tab. The downloads and showcases below describe the upstream releases. [Archive format notes and verification commands](docs/ARCHIVE_BROWSER.md)
 
 <p align="center">
   <img src="https://img.shields.io/badge/Version-v1.3.0-FFA81C?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/Rust-1.85%2B-orange?style=flat-square&logo=rust" alt="Rust" />
   <img src="https://img.shields.io/badge/Shaders-RDNA2%20GFX10.3%20%E2%86%92%20HLSL%20%2F%20SPIR--V-FF4FA3?style=flat-square" alt="Shaders" />
-  <img src="https://img.shields.io/badge/Textures-100%25%20DXGI%20%2B%20RDNA2%204KB%2F64KB-48D2FF?style=flat-square" alt="Textures" />
+  <img src="https://img.shields.io/badge/Textures-DXGI%20%2B%20RDNA2%204KB%2F64KB-48D2FF?style=flat-square" alt="Textures" />
   <img src="https://img.shields.io/badge/3D-Model%20Viewer%20(10%20Categories)-FF55AF?style=flat-square" alt="3D" />
   <img src="https://img.shields.io/badge/Audio-Pure%20Rust%20Opus%20(Zero%20FFmpeg)-90EBA5?style=flat-square" alt="Audio" />
   <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D6?style=flat-square" alt="Windows" />
@@ -21,7 +44,7 @@
 </p>
 
 <p align="center">
-  <strong>Latest Release: <a href="https://github.com/rpatty-dev/PercyStar/releases/latest">Download PercyStar v1.3.0 (Win64 + In-App Auto-Updater)</a></strong> · <strong><a href="https://github.com/rpatty-dev/PercyStar/releases/download/v1.0.3/PercyStar_macOS.zip">macOS Universal Build</a></strong><br />
+  <strong>Upstream release: <a href="https://github.com/rpatty-dev/PercyStar/releases/latest">Download PercyStar v1.3.0 (Win64 + In-App Auto-Updater)</a></strong> · <strong><a href="https://github.com/rpatty-dev/PercyStar/releases/download/v1.0.3/PercyStar_macOS.zip">macOS Universal Build</a></strong><br />
   <strong>Live Research &amp; Breakthroughs Dashboard: <a href="https://percystar-breakthroughs.vercel.app">percystar-breakthroughs.vercel.app</a></strong> · <strong><a href="https://mapnavmeshsite.vercel.app">Interactive NavMesh World Map</a></strong><br />
   <sub>Windows users on v1.0.3+ can click the golden <b>★ Update Available</b> pill inside PercyStar for 1-click self-update.</sub>
 </p>
@@ -62,7 +85,7 @@
 
 ---
 
-## Features & Format Breakthroughs (v1.2.0)
+## Upstream features and research (v1.2.0)
 
 - **Native Xbox Series X `PS\x00\x09` AMD RDNA2 (GFX10.3) Shader Disassembler & HLSL / SPIR-V Lifter (`Shaders (RDNA2)` Tab)**
   - Parses the complete `PS\x00\x09` PSO cache (`25,471` Graphics PSOs, `2,693` Compute PSOs, `54,576` metadata blobs, `21,522` compiled AMD GFX10.3 shaders), including `0x41` `USER_DATA` root-signature bindings (`SRV`/`CBV`/`UAV`/`Sampler`), `COMPUTE_PGM_RSRC1/2`, and `[numthreads(x,y,z)]`.
@@ -72,7 +95,7 @@
   - Full-screen 3D workspace built for instant 60 FPS browsing across **144,000+ RAGE 9 3D models**.
   - **10 Strict RAGE 9 Categories** with live counts: **All Models**, **Vehicles**, **Air & Sea**, **Weapons**, **Characters**, **Clothing**, **Animals** (`cr[mbfraci]_` taxonomy), **Props & Items**, **World / Map**, and **NavMesh 3D**.
   - **Hide LODs/Bounds** toggle (filters `_lod`/`_slod`/`batchlod`/`bipedbounds`/`collision_`), `◀ Prev` / `Next ▶` / `Random` buttons, `Up`/`Down` arrow-key browsing, **5 Camera Presets** (`3/4`, `Front`, `Side`, `Back`, `Top`), and **1-Click Catalog CSV Import** + `.OBJ` loader.
-- **100% Xbox Series X (Scarlett / RDNA2) Texture Engine (`.#td` & `.ttpf`)**
+- **Xbox Series X (Scarlett / RDNA2) Texture Engine (`.#td` & `.ttpf`)**
   - **100.00% TTPF Format Identification (357,115 / 357,115 textures):** Solved ETPF descriptor `u1` bits 3..9 (`(u1 >> 3) & 0x7F` = exact Microsoft `DXGI_FORMAT` enum) — zero unknown texture formats.
   - **All 20+ DXGI Formats Decoded Natively in Pure Rust:** `BC1`–`BC7`, `BC6H_UF16`/`SF16` HDR, `R16G16B16A16_FLOAT`/`UNORM`, `R16_FLOAT`/`UNORM`, `R16G16_FLOAT`, `R32_FLOAT`, `R10G10B10A2_UNORM`, `R8G8B8A8`, `B8G8R8A8`, `R8_UNORM`, `A8_UNORM` (`texture2ddecoder` + IEEE-754 half-float Reinhard tonemapping).
   - **Verified RDNA2 4KB (`SW_4KB_D`) & 64KB Deswizzle for All 5 Bit Depths (8 / 16 / 32 / 64 / 128bpp):** Plus reverse-mip `mip0` tail addressing, instant `O(log N)` RDS5 chunk seeking, exact RDS5 chunk codec decoding (`0=RAW`, `1..7=HW BCPack BC1..BC7`, `8=ZLIB`), interactive zoom viewer, multi-texture strip, and **Export PNG / Export DDS (DX10)**.

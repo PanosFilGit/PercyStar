@@ -160,7 +160,12 @@ impl Mesh3D {
     }
 
     pub fn export_obj(&self, path: &Path) -> std::io::Result<()> {
-        let mut w = BufWriter::new(File::create(path)?);
+        crate::archive::write_new(path, |file| self.write_obj(file).map_err(|e| e.to_string()))
+            .map_err(std::io::Error::other)
+    }
+
+    fn write_obj(&self, file: &mut File) -> std::io::Result<()> {
+        let mut w = BufWriter::new(file);
         writeln!(w, "# PercyStar RAGE9 Model Export: {}", self.name)?;
         writeln!(w, "o {}", self.name)?;
         for v in &self.verts {
@@ -180,7 +185,7 @@ impl Mesh3D {
                 writeln!(w, "f {} {} {}", t[0] + 1, t[1] + 1, t[2] + 1)?;
             }
         }
-        Ok(())
+        w.flush()
     }
 }
 

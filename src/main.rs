@@ -1,3 +1,9 @@
+mod archive;
+mod archive_browser;
+mod archive_cli;
+#[cfg(test)]
+mod archive_tests;
+mod rds;
 mod awc;
 mod model3d;
 mod rdna2;
@@ -11,7 +17,7 @@ use rdna2::{
     lift_to_spirv,
 };
 use tex::{
-    DecodedTexture, build_dds_dx10, decode_0drpz_text, decode_navmesh_from_rpf, decode_rbf0,
+    DecodedTexture, export_texture_dds, decode_0drpz_text, decode_navmesh_from_rpf, decode_rbf0,
     decode_ttpf_texture, decode_txd_from_rpf, export_texture_png, inspect_gfx, probe_txd_header,
     scan_ttpf_descriptors,
 };
@@ -28,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const REPO_RELEASES_URL: &str = "https://github.com/rpatty-dev/PercyStar/releases";
+const REPO_RELEASES_URL: &str = "https://github.com/PanosFilGit/PercyStar/releases";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -163,6 +169,7 @@ use plat::{active_window, dock_child_hwnd, find_binkplay, find_hwnd_for_pid, mov
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum AppTab {
     #[default]
+    Archives,
     Explorer,
     ModelViewer,
     Shaders,
@@ -599,6 +606,7 @@ fn spawn_install_update(ver: String, upd: Arc<Mutex<UpdateState>>, ctx: egui::Co
 }
 
 struct Rpf9App {
+    browser: archive_browser::Browser,
     target_path: Option<PathBuf>,
     is_folder: bool,
     selected_rpf: String,
@@ -659,6 +667,7 @@ impl Rpf9App {
             cc.egui_ctx.load_texture("percystar_logo", ci, TextureOptions::LINEAR)
         });
         let mut app = Self {
+            browser: Default::default(),
             target_path: None,
             is_folder: false,
             selected_rpf: "All RPFs".into(),
@@ -693,7 +702,7 @@ impl Rpf9App {
             cached_rpf_names: Vec::new(),
             last_rebuild: Instant::now(),
             update: Arc::new(Mutex::new(UpdateState::default())),
-            tab: AppTab::Explorer,
+            tab: AppTab::Archives,
             mv_cat: ModelCat::All,
             mv_filter: String::new(),
             mv_hide_lods: true,
@@ -713,10 +722,10 @@ impl Rpf9App {
         };
         load_ui_state(&mut app);
         spawn_update_check(Arc::clone(&app.update), cc.egui_ctx.clone());
-        if let Some(last) = load_last_folder() {
-            if last.is_dir() {
-                app.start_folder_scan(last);
-            }
+        if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from)
+            .or_else(|| load_last_folder().filter(|p| p.is_dir()))
+        {
+            app.browser.open(path);
         }
         app
     }
@@ -1915,7 +1924,7 @@ impl Rpf9App {
                                     .set_file_name(format!("shader_{:05}_{}.hlsl", entry.index, entry.stage.tag()))
                                     .save_file()
                                 {
-                                    let _ = fs::write(&p, lift_to_hlsl(entry, code));
+                                    if let Err(e) = archive::write_bytes_new(&p, lift_to_hlsl(entry, code)) { self.sh_status = e; }
                                 }
                             }
                             if ui.button("Export .spv").clicked() {
@@ -1923,7 +1932,7 @@ impl Rpf9App {
                                     .set_file_name(format!("shader_{:05}_{}.spv", entry.index, entry.stage.tag()))
                                     .save_file()
                                 {
-                                    let _ = fs::write(&p, lift_to_spirv(entry, code));
+                                    if let Err(e) = archive::write_bytes_new(&p, lift_to_spirv(entry, code)) { self.sh_status = e; }
                                 }
                             }
                             if ui.button("Export .asm").clicked() {
@@ -1931,7 +1940,7 @@ impl Rpf9App {
                                     .set_file_name(format!("shader_{:05}_{}.asm", entry.index, entry.stage.tag()))
                                     .save_file()
                                 {
-                                    let _ = fs::write(&p, format_gfx103_disasm(entry, code));
+                                    if let Err(e) = archive::write_bytes_new(&p, format_gfx103_disasm(entry, code)) { self.sh_status = e; }
                                 }
                             }
                         });
@@ -1973,54 +1982,67 @@ impl Rpf9App {
             let st = self.state.lock().unwrap();
             indices.iter().filter_map(|&i| st.entries.get(i).cloned()).collect()
         };
-        let mut ok = 0usize;
-        for e in entries {
-            if e.kind == "MODEL" || e.kind == "VEH" {
-                if let Ok(mesh) = decode_rage9_model_from_rpf(&e.source_rpf, e.offset, &e.name) {
-                    let fname = format!("{}.obj", e.name.replace('#', ""));
-                    if mesh.export_obj(&out_dir.join(fname)).is_ok() {
-                        ok += 1;
-                    }
-                }
-            } else if e.kind == "NAVM" {
-                if let Ok(mesh) = decode_navmesh_from_rpf(&e.source_rpf, e.offset, &e.name) {
-                    let fname = format!("{}.obj", e.name.replace('#', ""));
-                    if mesh.export_obj(&out_dir.join(fname)).is_ok() {
-                        ok += 1;
-                    }
-                }
-            } else if e.kind == "TXD" {
-                if let Ok(texs) = decode_txd_from_rpf(&e.source_rpf, e.offset) {
-                    for t in &texs {
-                        let safe: String = t.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' }).collect();
-                        if export_texture_png(t, &out_dir.join(format!("{safe}.png"))).is_ok() {
-                            ok += 1;
-                        }
-                    }
-                }
-            } else if e.kind == "TTPF" {
-                if let Ok(t) = decode_ttpf_texture(&e.source_rpf, e.tracks as usize) {
-                    if export_texture_png(&t, &out_dir.join(format!("{}.png", t.name))).is_ok() {
-                        ok += 1;
-                    }
-                }
-            } else if e.kind == "RBF0" {
-                if let Ok(data) = read_entry_bytes(&e) {
-                    let xml = decode_rbf0(&data).unwrap_or_else(|| String::from_utf8_lossy(&data).into_owned());
-                    let fname = format!("{}.xml", e.name.trim_end_matches(".rbf"));
-                    if fs::write(out_dir.join(fname), xml).is_ok() {
-                        ok += 1;
-                    }
-                }
-            } else if let Ok(data) = read_entry_bytes(&e) {
-                let fname = if self.is_folder { format!("{}_{}", e.rpf_name.trim_end_matches(".rpf"), e.name) } else { e.name.clone() };
-                if fs::write(out_dir.join(fname), &data).is_ok() {
-                    ok += 1;
+        let state = self.state.clone();
+        let is_folder = self.is_folder;
+        std::thread::spawn(move || {
+            let (mut written, mut failed) = (0, 0);
+            let mut last_error = String::new();
+            for e in entries {
+                let result = export_recovered_entry(&e, &out_dir, is_folder, &mut written);
+                if let Err(err) = result {
+                    failed += 1;
+                    last_error = format!(" · {}: {err}", e.name);
                 }
             }
-        }
-        self.state.lock().unwrap().status = format!("Exported {ok} file(s) to {}", out_dir.display());
+            state.lock().unwrap().status = format!("Exported {written} file(s) · {failed} failed{last_error}");
+        });
     }
+}
+
+fn export_recovered_entry(e: &RpfEntry, dir: &Path, is_folder: bool, written: &mut usize) -> Result<(), String> {
+    let destination = |name: String| {
+        if archive::safe_component(&name) { Ok(dir.join(name)) }
+        else { Err(format!("Invalid export name {name:?}")) }
+    };
+    match e.kind {
+        "MODEL" | "VEH" | "NAVM" => {
+            let mesh = if e.kind == "NAVM" { decode_navmesh_from_rpf(&e.source_rpf, e.offset, &e.name)? }
+                else { decode_rage9_model_from_rpf(&e.source_rpf, e.offset, &e.name)? };
+            let path = destination(format!("{}.obj", e.name.replace('#', "")))?;
+            mesh.export_obj(&path).map_err(|err| err.to_string())?;
+        }
+        "TXD" => {
+            let textures = decode_txd_from_rpf(&e.source_rpf, e.offset)?;
+            if textures.is_empty() { return Err("No decodable textures".into()); }
+            for t in textures {
+                let path = destination(format!("{}.png", t.name))?;
+                export_texture_png(&t, &path)?;
+                *written += 1;
+            }
+            return Ok(());
+        }
+        "TTPF" => {
+            let t = decode_ttpf_texture(&e.source_rpf, e.tracks as usize)?;
+            export_texture_png(&t, &destination(format!("{}.png", t.name))?)?;
+        }
+        "RBF0" => {
+            let data = read_entry_bytes(e).map_err(|err| err.to_string())?;
+            let xml = decode_rbf0(&data).ok_or("RBF0 decode failed")?;
+            archive::write_bytes_new(&destination(format!("{}.xml", e.name.trim_end_matches(".rbf")))?, xml)?;
+        }
+        _ => {
+            let name = if is_folder { format!("{}_{}", e.rpf_name.trim_end_matches(".rpf"), e.name) } else { e.name.clone() };
+            let path = destination(name)?;
+            if e.chunks.is_empty() && !matches!(e.kind, "XML" | "PSIN" | "GFX" | "GXT" | "ZLIB") {
+                let source = archive::Source::open(&e.source_rpf)?;
+                archive::write_new(&path, |file| source.copy(e.offset, e.comp_size, file))?;
+            } else {
+                archive::write_bytes_new(&path, read_entry_bytes(e).map_err(|err| err.to_string())?)?;
+            }
+        }
+    }
+    *written += 1;
+    Ok(())
 }
 
 fn app_data_dir() -> Option<PathBuf> {
@@ -2325,29 +2347,30 @@ fn format_hex(data: &[u8]) -> String {
 }
 
 fn read_entry_bytes(e: &RpfEntry) -> std::io::Result<Vec<u8>> {
-    use flate2::read::ZlibDecoder;
-    let mut f = File::open(&e.source_rpf)?;
-    if !e.chunks.is_empty() {
-        let mut combined = Vec::new();
-        for &(coff, clen) in &e.chunks {
-            f.seek(SeekFrom::Start(coff))?;
-            let mut raw = vec![0u8; clen as usize];
-            f.read_exact(&mut raw)?;
-            ZlibDecoder::new(&raw[..]).read_to_end(&mut combined)?;
-        }
-        Ok(combined)
-    } else {
-        f.seek(SeekFrom::Start(e.offset))?;
-        let mut raw = vec![0u8; e.comp_size as usize];
-        f.read_exact(&mut raw)?;
-        if matches!(e.kind, "XML" | "PSIN" | "RBF0" | "GFX" | "GXT" | "ZLIB") {
-            let mut out = Vec::new();
-            ZlibDecoder::new(&raw[..]).read_to_end(&mut out)?;
-            Ok(out)
+    use std::io::{Error, ErrorKind};
+    use flate2::bufread::ZlibDecoder;
+    const LIMIT: u64 = 128 << 20;
+    let source = archive::Source::open(&e.source_rpf).map_err(Error::other)?;
+    let compressed = !e.chunks.is_empty() || matches!(e.kind, "XML" | "PSIN" | "RBF0" | "GFX" | "GXT" | "ZLIB");
+    let mut ranges = e.chunks.as_slice();
+    let single = [(e.offset, e.comp_size)];
+    if ranges.is_empty() { ranges = &single; }
+    let mut out = Vec::new();
+    for &(offset, len) in ranges {
+        if len > LIMIT { return Err(Error::new(ErrorKind::InvalidData, "Recovery preview exceeds 128 MiB")); }
+        if compressed {
+            let mut input = Vec::new();
+            source.copy(offset, len, &mut input).map_err(Error::other)?;
+            let mut dec = ZlibDecoder::new(&input[..]);
+            (&mut dec).take(LIMIT + 1 - out.len() as u64).read_to_end(&mut out)?;
+            if dec.total_in() != len || out.len() as u64 > LIMIT {
+                return Err(Error::new(ErrorKind::InvalidData, "Invalid or oversized recovery stream"));
+            }
         } else {
-            Ok(raw)
+            source.copy(offset, len, &mut out).map_err(Error::other)?;
         }
     }
+    Ok(out)
 }
 
 fn extract_xml_tag(bytes: &[u8]) -> Option<String> {
@@ -2726,6 +2749,7 @@ fn scan_single_rpf(path: &PathBuf, progress_state: Option<&Arc<Mutex<ScanState>>
 
 impl eframe::App for Rpf9App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.browser.poll(ctx);
         let (media_loading, media_status, awc_streams) = {
             let mut m = self.media.lock().unwrap();
             if let Some(mesh) = m.loaded_mesh.take() {
@@ -2757,7 +2781,8 @@ impl eframe::App for Rpf9App {
                 ui.add_space(10.0);
                 // Top-level mode tabs: Explorer | Model Viewer | Shaders (RDNA2)
                 for (tab_id, label) in [
-                    (AppTab::Explorer, "Explorer"),
+                    (AppTab::Archives, "Archives"),
+                    (AppTab::Explorer, "Asset search"),
                     (AppTab::ModelViewer, "Model Viewer"),
                     (AppTab::Shaders, "Shaders (RDNA2)"),
                 ] {
@@ -2771,7 +2796,9 @@ impl eframe::App for Rpf9App {
                     .fill(if active { Color32::from_rgb(255, 168, 28) } else { Color32::from_rgb(42, 26, 62) });
                     if ui.add(btn).clicked() && self.tab != tab_id {
                         self.tab = tab_id;
-                        if tab_id == AppTab::ModelViewer {
+                        if tab_id == AppTab::Archives {
+                            self.stop_bink_player();
+                        } else if tab_id == AppTab::ModelViewer {
                             self.stop_bink_player();
                             self.show_3d = true;
                         } else if tab_id == AppTab::Shaders {
@@ -2794,7 +2821,13 @@ impl eframe::App for Rpf9App {
                         self.update.lock().unwrap().show_modal = true;
                     }
                 }
-                ui.add_space(10.0);
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if self.tab == AppTab::Archives {
+                    self.browser.toolbar(ui);
+                    return;
+                }
                 if ui.button("Open Folder...").clicked() {
                     if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                         self.start_folder_scan(folder);
@@ -2849,6 +2882,10 @@ impl eframe::App for Rpf9App {
         });
 
         egui::TopBottomPanel::bottom("bottom").frame(egui::Frame::new().fill(Color32::from_rgb(14, 9, 22)).inner_margin(egui::Margin::symmetric(12, 5))).show(ctx, |ui| {
+            if self.tab == AppTab::Archives {
+                ui.label(&self.browser.status);
+                return;
+            }
             let (hdr, status, scanning) = {
                 let st = self.state.lock().unwrap();
                 (st.header_info.clone(), st.status.clone(), st.scanning)
@@ -2862,7 +2899,12 @@ impl eframe::App for Rpf9App {
             });
         });
 
-        if self.tab == AppTab::ModelViewer {
+        if self.tab == AppTab::Archives {
+            if let Some(path) = self.browser.show(ctx) {
+                self.tab = AppTab::Explorer;
+                self.start_single_scan(path);
+            }
+        } else if self.tab == AppTab::ModelViewer {
             self.render_model_viewer_tab(ctx, media_loading, &media_status);
         } else if self.tab == AppTab::Shaders {
             self.render_shader_tab(ctx);
@@ -3038,8 +3080,7 @@ impl eframe::App for Rpf9App {
                     if ui.button("Export DDS").clicked() {
                         let safe: String = t.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' }).collect();
                         if let Some(p) = rfd::FileDialog::new().set_file_name(format!("{safe}.dds")).add_filter("DirectDraw Surface", &["dds"]).save_file() {
-                            let dds = build_dds_dx10(t.w, t.h, t.dxgi, &t.raw_dds_payload);
-                            if let Err(err) = fs::write(&p, &dds) {
+                            if let Err(err) = export_texture_dds(t, &p) {
                                 self.state.lock().unwrap().status = format!("DDS write error: {err}");
                             } else {
                                 self.state.lock().unwrap().status = format!("Saved {}", p.display());
@@ -3369,9 +3410,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the upstream multi-archive fixture directory"]
     fn real_gta6_archives_smoke_test() {
         let base = Path::new(r"D:\Grand Theft Auto VI Build");
-        if !base.exists() { return; }
+        assert!(base.is_dir(), "Upstream fixture directory is missing");
 
         // 1. TTPF native scan + decode
         let ttpf = base.join("data").join("ttdb").join("ui").join("platform.ttpf");
@@ -3484,7 +3526,7 @@ fn export_models_cli(rpf_path: &PathBuf, out_dir: &PathBuf, filter: &str, vehicl
     for (idx, (key, off, name)) in list.iter().enumerate() {
         if let Ok(mesh) = decode_rage9_model_from_rpf(rpf_path, *off, name) {
             let fname = if vehicles_only { format!("{key}.obj") } else { format!("{}.obj", name.replace('#', "").replace('.', "_")) };
-            if mesh.export_obj(&out_dir.join(fname)).is_ok() {
+            if archive::safe_component(&fname) && mesh.export_obj(&out_dir.join(fname)).is_ok() {
                 ok += 1;
                 if ok <= 25 || ok % 50 == 0 {
                     eprintln!("  [{}/{}] {} ({} v, {} f)", idx + 1, list.len(), key, mesh.verts.len(), mesh.tris.len());
@@ -3507,13 +3549,14 @@ fn dump_textures_cli(src_path: &PathBuf, out_dir: &PathBuf, limit: usize) {
         let n = if limit == 0 { ix.descs.len() } else { limit.min(ix.descs.len()) };
         eprintln!("Dumping up to {n}/{} textures from {}...", ix.descs.len(), src_path.display());
         for d in ix.descs.iter().take(n) {
-            match decode_ttpf_texture(src_path, d.idx) {
+            match tex::decode_indexed_texture(&ix, d.idx) {
                 Ok(tx) => {
-                    if export_texture_png(&tx, &out_dir.join(format!("{}.png", tx.name))).is_ok() {
-                        ok += 1;
+                    match export_texture_png(&tx, &out_dir.join(format!("{}.png", tx.name))) {
+                        Ok(()) => ok += 1,
+                        Err(e) => { fail += 1; eprintln!("{}: {e}", tx.name); }
                     }
                 }
-                Err(e) if e.contains("BCPack") => bcpk += 1,
+                Err(e) if e.contains("Unsupported codec") => bcpk += 1,
                 Err(_) => fail += 1,
             }
             if (ok + bcpk + fail) % 250 == 0 {
@@ -3654,6 +3697,10 @@ fn main() -> eframe::Result<()> {
         let _ = fs::remove_file(cur.with_extension("exe.old"));
     }
     let args: Vec<String> = std::env::args().collect();
+    if let Some(result) = archive_cli::run(&args) {
+        if let Err(e) = result { eprintln!("{e}"); std::process::exit(1); }
+        return Ok(());
+    }
     if args.len() >= 4 && args[1] == "--disasm-shaders" {
         let lim = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(25);
         disasm_shaders_cli(&PathBuf::from(&args[2]), &PathBuf::from(&args[3]), lim);
