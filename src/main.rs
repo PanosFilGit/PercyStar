@@ -155,6 +155,132 @@ pub fn stop_wav() {
 }
 use plat::{active_window, dock_child_hwnd, find_binkplay, find_hwnd_for_pid, move_window, play_wav_async, stop_wav};
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum AppTab {
+    #[default]
+    Explorer,
+    ModelViewer,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum ModelCat {
+    #[default]
+    All,
+    Vehicles,
+    AircraftBoats,
+    Weapons,
+    Characters,
+    Clothing,
+    Animals,
+    Props,
+    World,
+    NavMesh,
+}
+
+const MODEL_CATS: [(ModelCat, &str); 10] = [
+    (ModelCat::All, "All Models"),
+    (ModelCat::Vehicles, "Vehicles"),
+    (ModelCat::AircraftBoats, "Air & Sea"),
+    (ModelCat::Weapons, "Weapons"),
+    (ModelCat::Characters, "Characters"),
+    (ModelCat::Clothing, "Clothing"),
+    (ModelCat::Animals, "Animals"),
+    (ModelCat::Props, "Props & Items"),
+    (ModelCat::World, "World / Map"),
+    (ModelCat::NavMesh, "NavMesh 3D"),
+];
+
+fn model_cat_idx(c: ModelCat) -> usize {
+    match c {
+        ModelCat::All => 0,
+        ModelCat::Vehicles => 1,
+        ModelCat::AircraftBoats => 2,
+        ModelCat::Weapons => 3,
+        ModelCat::Characters => 4,
+        ModelCat::Clothing => 5,
+        ModelCat::Animals => 6,
+        ModelCat::Props => 7,
+        ModelCat::World => 8,
+        ModelCat::NavMesh => 9,
+    }
+}
+
+fn model_cat_tag(c: ModelCat) -> (&'static str, Color32) {
+    match c {
+        ModelCat::Vehicles => ("VEH", Color32::from_rgb(255, 85, 175)),
+        ModelCat::AircraftBoats => ("AIR", Color32::from_rgb(72, 210, 255)),
+        ModelCat::Weapons => ("WPN", Color32::from_rgb(255, 120, 82)),
+        ModelCat::Characters => ("CHR", Color32::from_rgb(252, 175, 23)),
+        ModelCat::Clothing => ("CLO", Color32::from_rgb(215, 130, 255)),
+        ModelCat::Animals => ("ANM", Color32::from_rgb(95, 235, 145)),
+        ModelCat::Props => ("PRP", Color32::from_rgb(130, 185, 255)),
+        ModelCat::World => ("WLD", Color32::from_rgb(160, 170, 190)),
+        ModelCat::NavMesh => ("NAV", Color32::from_rgb(125, 235, 110)),
+        ModelCat::All => ("MDL", Color32::from_rgb(180, 185, 200)),
+    }
+}
+
+fn classify_model_cat(kind: &str, name: &str) -> ModelCat {
+    if kind == "NAVM" {
+        return ModelCat::NavMesh;
+    }
+    let lo = name.to_ascii_lowercase();
+    let has = |pats: &[&str]| pats.iter().any(|p| lo.contains(p));
+    if has(&[
+        "plane", "heli", "chopper", "jet_", "seaplane", "blimp", "boat", "yacht",
+        "ship", "skiff", "airboat", "kayak", "seashark", "submar", "hovercraft", "dinghy",
+    ]) {
+        return ModelCat::AircraftBoats;
+    }
+    if has(&[
+        "w_ar_", "w_pi_", "w_sg_", "w_sr_", "w_sb_", "w_me_", "w_lr_", "w_ex_",
+        "w_mg_", "w_am_", "weap", "rifle", "pistol", "shotgun", "sniper", "grenade",
+        "machete", "silencer", "suppressor", "holster", "gun_", "_gun",
+    ]) {
+        return ModelCat::Weapons;
+    }
+    if has(&[
+        "alligator", "gator", "tiger", "snake", "shark", "deer", "bear", "boar",
+        "pig_", "dog_", "cat_", "horse", "cow_", "bird", "duck", "seagull",
+        "pelican", "flamingo", "fish", "dolphin", "whale", "turtle", "frog",
+        "chimp", "monkey", "crr_", "crf_", "animal", "crab", "rat_", "crow",
+    ]) {
+        return ModelCat::Animals;
+    }
+    if kind == "VEH"
+        || has(&[
+            "veh_", "car_", "truck", "bike", "moto", "taxi", "police", "ambulance",
+            "firetruck", "bus_", "trailer", "forklift", "excavator", "tractor", "tank",
+            "van_", "suv_", "coupe", "sedan", "wheel_", "chassis",
+        ])
+    {
+        return ModelCat::Vehicles;
+    }
+    if has(&[
+        "shirt", "jacket", "coat", "pant", "jean", "short", "dress", "skirt",
+        "shoe", "boot", "sneaker", "hat_", "cap_", "glasses", "watch", "ring_",
+        "necklace", "chain_", "backpack", "mask_", "helmet", "vest_", "bodice",
+        "corset", "tights", "stocking", "glove", "hoodie", "jersey", "bikini", "swim",
+    ]) {
+        return ModelCat::Clothing;
+    }
+    if has(&[
+        "cs_", "ig_", "player", "lucia", "jason", "head_", "face_", "hair", "beard",
+        "bodygenital", "body_", "torso", "gore_", "ped_", "_mr1_", "_fr1_", "_mb1_",
+        "_fb1_", "_mo1_", "_fo1_", "eyebrow", "eyelash", "teeth",
+    ]) {
+        return ModelCat::Characters;
+    }
+    if has(&[
+        "prop_", "p_", "cvar_", "chair", "table", "bed_", "lamp", "sign_", "phone",
+        "laptop", "bottle", "cup_", "crate", "barrel", "bench", "trash", "bin_",
+        "vending", "atm_", "door_", "sofa", "couch", "tv_", "stool", "cabinet",
+    ]) {
+        return ModelCat::Props;
+    }
+    ModelCat::World
+}
+
 #[derive(Clone, PartialEq, Eq)]
 enum Category {
     All,
@@ -372,6 +498,17 @@ struct Rpf9App {
     cached_rpf_names: Vec<String>,
     last_rebuild: Instant,
     update: Arc<Mutex<UpdateState>>,
+    // dedicated Model Viewer tab state (cached for instant browsing across 145k+ models)
+    tab: AppTab,
+    mv_cat: ModelCat,
+    mv_filter: String,
+    mv_hide_lods: bool,
+    mv_entries: Vec<(usize, ModelCat, String)>,
+    mv_counts: [usize; 10],
+    mv_ver: u64,
+    mv_view: Vec<usize>,
+    mv_view_key: Option<(u64, ModelCat, String, bool)>,
+    mv_rng: u64,
 }
 
 impl Rpf9App {
@@ -416,6 +553,16 @@ impl Rpf9App {
             cached_rpf_names: Vec::new(),
             last_rebuild: Instant::now(),
             update: Arc::new(Mutex::new(UpdateState::default())),
+            tab: AppTab::Explorer,
+            mv_cat: ModelCat::All,
+            mv_filter: String::new(),
+            mv_hide_lods: true,
+            mv_entries: Vec::new(),
+            mv_counts: [0; 10],
+            mv_ver: u64::MAX,
+            mv_view: Vec::new(),
+            mv_view_key: None,
+            mv_rng: 0x9E37_79B9_7F4A_7C15,
         };
         load_ui_state(&mut app);
         spawn_update_check(Arc::clone(&app.update), cc.egui_ctx.clone());
@@ -1022,6 +1169,376 @@ impl Rpf9App {
         self.view = view;
         self.view_key = Some(key);
         self.last_rebuild = Instant::now();
+    }
+
+    fn find_local_catalog(&self, fname: &str) -> Option<PathBuf> {
+        let mut dirs = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(p) = exe.parent() {
+                dirs.push(p.join("models_catalog"));
+                dirs.push(p.to_path_buf());
+            }
+        }
+        if let Some(tp) = &self.target_path {
+            dirs.push(tp.join("models_catalog"));
+            if let Some(par) = tp.parent() {
+                dirs.push(par.join("models_catalog"));
+            }
+        }
+        dirs.push(PathBuf::from(r"F:\Ext6\models_catalog"));
+        for d in dirs {
+            let p = d.join(fname);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    fn refresh_mv_view(&mut self) {
+        let ver = self.state.lock().unwrap().ver;
+        if self.mv_ver != ver {
+            let st = self.state.lock().unwrap();
+            let mut entries = Vec::new();
+            let mut counts = [0usize; 10];
+            for (idx, e) in st.entries.iter().enumerate() {
+                if !matches!(e.kind, "MODEL" | "VEH" | "NAVM") {
+                    continue;
+                }
+                let cat = classify_model_cat(e.kind, &e.name);
+                if cat != ModelCat::NavMesh {
+                    counts[0] += 1;
+                }
+                counts[model_cat_idx(cat)] += 1;
+                let hay = format!("{}|{}", e.name, e.rpf_name).to_ascii_lowercase();
+                entries.push((idx, cat, hay));
+            }
+            drop(st);
+            self.mv_entries = entries;
+            self.mv_counts = counts;
+            self.mv_ver = ver;
+            self.mv_view_key = None;
+        }
+        let key = (ver, self.mv_cat, self.mv_filter.clone(), self.mv_hide_lods);
+        if self.mv_view_key.as_ref() == Some(&key) {
+            return;
+        }
+        let q = key.2.to_ascii_lowercase();
+        let (inc, exc): (Vec<&str>, Vec<&str>) = q.split_whitespace().partition(|t| !t.starts_with('-'));
+        let exc: Vec<&str> = exc.iter().map(|t| &t[1..]).filter(|t| !t.is_empty()).collect();
+        let mut view: Vec<usize> = self
+            .mv_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, cat, hay))| {
+                let cat_ok = match self.mv_cat {
+                    ModelCat::All => *cat != ModelCat::NavMesh,
+                    other => *cat == other,
+                };
+                let lod_ok = !self.mv_hide_lods
+                    || self.mv_cat == ModelCat::NavMesh
+                    || (!hay.contains("_slod") && !hay.contains("_lod.") && !hay.contains("_lod_") && !hay.contains("_mid."));
+                cat_ok
+                    && lod_ok
+                    && inc.iter().all(|t| hay.contains(t))
+                    && !exc.iter().any(|t| hay.contains(t))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if let Some(first) = inc.first() {
+            view.sort_by_key(|&i| (!self.mv_entries[i].2.starts_with(first), self.mv_entries[i].2.len()));
+        }
+        self.mv_view = view;
+        self.mv_view_key = Some(key);
+    }
+
+    fn next_rand(&mut self) -> usize {
+        let mut x = self.mv_rng;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.mv_rng = x;
+        x as usize
+    }
+
+    fn render_model_viewer_tab(&mut self, ctx: &egui::Context, media_loading: bool, media_status: &str) {
+        self.refresh_mv_view();
+        let mut to_select: Option<usize> = None;
+
+        egui::SidePanel::left("mv_sidebar")
+            .default_width(360.0)
+            .frame(egui::Frame::new().fill(Color32::from_rgb(20, 13, 31)).inner_margin(10.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("MODEL VIEWER").size(12.0).strong().color(Color32::from_rgb(255, 168, 28)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(format!("{} shown · {} total", self.mv_view.len(), self.mv_counts[0]))
+                                .size(11.0)
+                                .color(Color32::from_rgb(155, 145, 180)),
+                        );
+                    });
+                });
+                ui.add_space(6.0);
+
+                // Quick catalog & OBJ loaders
+                let curated_p = self.find_local_catalog("models_vehicles_weapons_peds.csv");
+                let master_p = self.find_local_catalog("models_catalog_master.csv");
+                ui.horizontal_wrapped(|ui| {
+                    if let Some(cp) = curated_p {
+                        if ui.button("★ Curated (32k)").on_hover_text("Load vehicles, weapons, characters, animals & fragtypes").clicked() {
+                            self.import_catalog_csv(&cp);
+                            self.refresh_mv_view();
+                        }
+                    }
+                    if let Some(mp) = master_p {
+                        if ui.button("Master (144k)").on_hover_text("Load all 144,655 discovered GTA VI 3D models").clicked() {
+                            self.import_catalog_csv(&mp);
+                            self.refresh_mv_view();
+                        }
+                    }
+                    if ui.button("Import CSV...").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("Models Catalog CSV", &["csv"]).pick_file() {
+                            self.import_catalog_csv(&p);
+                            self.refresh_mv_view();
+                        }
+                    }
+                    if ui.button("Open .OBJ").clicked() {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("OBJ 3D Model", &["obj"]).pick_file() {
+                            if let Some(m) = parse_obj(&p) {
+                                self.textures.clear();
+                                self.tex_handle = None;
+                                self.mesh3d = Some(m);
+                                self.show_3d = true;
+                            }
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.label(RichText::new("CATEGORIES").size(10.5).color(Color32::from_rgb(120, 128, 148)));
+                ui.add_space(3.0);
+
+                // 2-column category chip grid
+                egui::Grid::new("mv_cat_grid").num_columns(2).spacing([6.0, 4.0]).show(ui, |ui| {
+                    for (idx, &(cat, label)) in MODEL_CATS.iter().enumerate() {
+                        let cnt = self.mv_counts[model_cat_idx(cat)];
+                        let active = self.mv_cat == cat;
+                        let (_, col) = model_cat_tag(cat);
+                        let txt = RichText::new(format!("{label} ({cnt})"))
+                            .size(11.5)
+                            .strong()
+                            .color(if active { Color32::BLACK } else { col });
+                        let btn = egui::Button::new(txt)
+                            .min_size(egui::vec2(162.0, 22.0))
+                            .fill(if active { Color32::from_rgb(255, 168, 28) } else { Color32::from_rgb(32, 20, 48) });
+                        if ui.add(btn).clicked() {
+                            self.mv_cat = cat;
+                        }
+                        if idx % 2 == 1 {
+                            ui.end_row();
+                        }
+                    }
+                });
+
+                ui.add_space(8.0);
+                let sr = ui.add(
+                    egui::TextEdit::singleline(&mut self.mv_filter)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Search models (Ctrl+F) · words AND · -exclude"),
+                );
+                if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+                    sr.request_focus();
+                }
+                if sr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.mv_filter.clear();
+                }
+
+                ui.add_space(5.0);
+                self.refresh_mv_view();
+                let cur_pos = self.selected.and_then(|sel| {
+                    self.mv_view.iter().position(|&mi| self.mv_entries[mi].0 == sel)
+                });
+                ui.horizontal(|ui| {
+                    let lod_btn = egui::Button::new(
+                        RichText::new(if self.mv_hide_lods { "Hide LODs: ON" } else { "Hide LODs: OFF" })
+                            .size(11.0)
+                            .color(if self.mv_hide_lods { Color32::BLACK } else { Color32::from_rgb(185, 180, 205) }),
+                    )
+                    .fill(if self.mv_hide_lods { Color32::from_rgb(95, 235, 145) } else { Color32::from_rgb(36, 24, 54) });
+                    if ui.add(lod_btn).clicked() {
+                        self.mv_hide_lods = !self.mv_hide_lods;
+                    }
+                    let has_any = !self.mv_view.is_empty();
+                    if ui.add_enabled(has_any, egui::Button::new("◀ Prev")).clicked() {
+                        let next_i = match cur_pos {
+                            Some(0) | None => self.mv_view.len() - 1,
+                            Some(p) => p - 1,
+                        };
+                        to_select = Some(self.mv_entries[self.mv_view[next_i]].0);
+                    }
+                    if ui.add_enabled(has_any, egui::Button::new("Next ▶")).clicked() {
+                        let next_i = match cur_pos {
+                            Some(p) if p + 1 < self.mv_view.len() => p + 1,
+                            _ => 0,
+                        };
+                        to_select = Some(self.mv_entries[self.mv_view[next_i]].0);
+                    }
+                    if ui.add_enabled(has_any, egui::Button::new("Random")).clicked() {
+                        let r = self.next_rand() % self.mv_view.len();
+                        to_select = Some(self.mv_entries[self.mv_view[r]].0);
+                    }
+                });
+
+                // Arrow key navigation when search box is not focused
+                if !sr.has_focus() && !self.mv_view.is_empty() {
+                    if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                        let next_i = match cur_pos {
+                            Some(p) if p + 1 < self.mv_view.len() => p + 1,
+                            _ => 0,
+                        };
+                        to_select = Some(self.mv_entries[self.mv_view[next_i]].0);
+                    } else if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
+                        let next_i = match cur_pos {
+                            Some(0) | None => self.mv_view.len() - 1,
+                            Some(p) => p - 1,
+                        };
+                        to_select = Some(self.mv_entries[self.mv_view[next_i]].0);
+                    }
+                }
+
+                ui.add_space(4.0);
+                ui.separator();
+
+                const ROW_H: f32 = 22.0;
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                egui::ScrollArea::vertical()
+                    .id_salt("mv_list_scroll")
+                    .auto_shrink([false, false])
+                    .show_rows(ui, ROW_H, self.mv_view.len(), |ui, range| {
+                        let rows: Vec<(usize, ModelCat, String, String)> = {
+                            let st = self.state.lock().unwrap();
+                            self.mv_view[range]
+                                .iter()
+                                .filter_map(|&mi| {
+                                    let (eidx, cat, _) = &self.mv_entries[mi];
+                                    st.entries.get(*eidx).map(|e| (*eidx, *cat, e.name.clone(), e.rpf_name.clone()))
+                                })
+                                .collect()
+                        };
+                        for (eidx, cat, name, rpf_name) in rows {
+                            let w = ui.available_width();
+                            let (tag, col) = model_cat_tag(cat);
+                            ui.allocate_ui_with_layout(egui::vec2(w, ROW_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.set_height(ROW_H);
+                                ui.label(RichText::new(tag).strong().size(10.5).color(col));
+                                let label = format!("{name}  ·  {rpf_name}");
+                                if ui.selectable_label(self.selected == Some(eidx), RichText::new(label).size(12.0)).clicked() {
+                                    to_select = Some(eidx);
+                                }
+                            });
+                        }
+                    });
+            });
+
+        if let Some(i) = to_select {
+            self.select_entry(i);
+            self.show_3d = true;
+        }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(Color32::from_rgb(13, 9, 21)).inner_margin(12.0))
+            .show(ctx, |ui| {
+                if media_loading {
+                    ui.centered_and_justified(|ui| {
+                        ui.vertical_centered(|ui| {
+                            draw_percystar_spinner(ui, 42.0);
+                            ui.add_space(10.0);
+                            ui.label(RichText::new(media_status).size(14.0).color(Color32::from_rgb(252, 175, 23)));
+                        });
+                    });
+                } else if !media_status.is_empty() && self.mesh3d.is_none() {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(40.0);
+                        ui.label(RichText::new(media_status).size(14.0).color(Color32::from_rgb(255, 130, 115)));
+                        ui.add_space(10.0);
+                        if !self.mv_view.is_empty() && ui.button("Try Random Model").clicked() {
+                            let r = self.next_rand() % self.mv_view.len();
+                            let eidx = self.mv_entries[self.mv_view[r]].0;
+                            self.select_entry(eidx);
+                        }
+                    });
+                } else if let Some(mesh) = self.mesh3d.as_mut() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(&mesh.name).size(15.0).strong().color(Color32::from_rgb(255, 168, 28)));
+                        ui.label(
+                            RichText::new(format!(
+                                "{} verts · {} tris · {} geoms · {} meshlets · {}",
+                                mesh.verts.len(),
+                                mesh.tris.len(),
+                                mesh.geom_count,
+                                mesh.meshlet_count,
+                                mesh.lod_label
+                            ))
+                            .size(11.5)
+                            .color(Color32::from_rgb(170, 200, 230)),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Quick camera presets
+                            for (lbl, yaw, pitch) in [
+                                ("Top", 0.0_f32, 1.48_f32),
+                                ("Back", std::f32::consts::PI, 0.12),
+                                ("Side", std::f32::consts::FRAC_PI_2, 0.12),
+                                ("Front", 0.0, 0.12),
+                                ("3/4", 2.45, 0.38),
+                            ] {
+                                if ui.button(lbl).clicked() {
+                                    mesh.yaw = yaw;
+                                    mesh.pitch = pitch;
+                                    mesh.pan_x = 0.0;
+                                    mesh.pan_y = 0.0;
+                                    mesh.dirty = true;
+                                }
+                            }
+                            ui.label(RichText::new("Cam:").size(11.0).color(Color32::from_rgb(130, 138, 156)));
+                        });
+                    });
+                    ui.separator();
+                    render_mesh3d_viewport(ui, mesh);
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(RichText::new("PERCYSTAR 3D MODEL VIEWER").size(20.0).strong().color(Color32::from_rgb(255, 168, 28)));
+                            ui.add_space(6.0);
+                            if self.mv_view.is_empty() {
+                                ui.label(
+                                    RichText::new("Open a GTA VI folder, import a catalog CSV (32k / 144k models), or open a .OBJ file.")
+                                        .size(13.0)
+                                        .color(Color32::from_rgb(185, 180, 210)),
+                                );
+                            } else {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "{} 3D models ready across {} categories — pick any model on the left or click below.",
+                                        self.mv_view.len(),
+                                        MODEL_CATS.len() - 1
+                                    ))
+                                    .size(13.0)
+                                    .color(Color32::from_rgb(185, 180, 210)),
+                                );
+                                ui.add_space(12.0);
+                                let btn = egui::Button::new(RichText::new("★ View Random 3D Model").size(14.0).strong().color(Color32::BLACK))
+                                    .fill(Color32::from_rgb(255, 168, 28));
+                                if ui.add(btn).clicked() {
+                                    let r = self.next_rand() % self.mv_view.len();
+                                    let eidx = self.mv_entries[self.mv_view[r]].0;
+                                    self.select_entry(eidx);
+                                }
+                            }
+                        });
+                    });
+                }
+            });
     }
 
     fn export_entries(&self, indices: &[usize]) {
@@ -1811,6 +2328,25 @@ impl eframe::App for Rpf9App {
                 ui.label(RichText::new("PERCYSTAR").size(17.0).strong().color(Color32::from_rgb(255, 168, 28)));
                 ui.label(RichText::new("RPF9").size(13.0).strong().color(Color32::from_rgb(255, 72, 165)));
                 ui.label(RichText::new(format!("v{APP_VERSION}")).size(11.5).color(Color32::from_rgb(165, 145, 195)));
+                ui.add_space(10.0);
+                // Top-level mode tabs: Explorer | Model Viewer
+                for (tab_id, label) in [(AppTab::Explorer, "Explorer"), (AppTab::ModelViewer, "Model Viewer")] {
+                    let active = self.tab == tab_id;
+                    let btn = egui::Button::new(
+                        RichText::new(label)
+                            .size(12.5)
+                            .strong()
+                            .color(if active { Color32::BLACK } else { Color32::from_rgb(225, 215, 240) }),
+                    )
+                    .fill(if active { Color32::from_rgb(255, 168, 28) } else { Color32::from_rgb(42, 26, 62) });
+                    if ui.add(btn).clicked() && self.tab != tab_id {
+                        self.tab = tab_id;
+                        if tab_id == AppTab::ModelViewer {
+                            self.stop_bink_player();
+                            self.show_3d = true;
+                        }
+                    }
+                }
                 let upd_avail = self.update.lock().unwrap().available.clone();
                 if let Some((ref new_ver, _)) = upd_avail {
                     let pill = egui::Button::new(
@@ -1889,6 +2425,9 @@ impl eframe::App for Rpf9App {
             });
         });
 
+        if self.tab == AppTab::ModelViewer {
+            self.render_model_viewer_tab(ctx, media_loading, &media_status);
+        } else {
         egui::SidePanel::left("tree").default_width(195.0).frame(egui::Frame::new().fill(Color32::from_rgb(18, 12, 28)).inner_margin(8.0)).show(ctx, |ui| {
             self.refresh_view();
             let c = self.counts;
@@ -2127,6 +2666,7 @@ impl eframe::App for Rpf9App {
                 });
             }
         });
+        } // end Explorer tab
 
         let (show_upd, upd_avail, upd_inst, upd_status) = {
             let g = self.update.lock().unwrap();
@@ -2180,6 +2720,19 @@ impl eframe::App for Rpf9App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_viewer_categories_classify_correctly() {
+        assert_eq!(classify_model_cat("VEH", "banshee_hi.#ft"), ModelCat::Vehicles);
+        assert_eq!(classify_model_cat("MODEL", "a_td_plane.#dr"), ModelCat::AircraftBoats);
+        assert_eq!(classify_model_cat("MODEL", "w_ar_carbinerifle.#dr"), ModelCat::Weapons);
+        assert_eq!(classify_model_cat("MODEL", "crr_alligator_american_m_00.#dr"), ModelCat::Animals);
+        assert_eq!(classify_model_cat("MODEL", "cs_donnie_head_mr1_cau_001_m_full.#dr"), ModelCat::Characters);
+        assert_eq!(classify_model_cat("MODEL", "bodicecorset_fb1_002.#dr"), ModelCat::Clothing);
+        assert_eq!(classify_model_cat("MODEL", "prop_am_table_dining_13b.#dr"), ModelCat::Props);
+        assert_eq!(classify_model_cat("MODEL", "a_bfyb01_sea_tr_02_bridge_01.#dr"), ModelCat::World);
+        assert_eq!(classify_model_cat("NAVM", "nav_160_179.ynv"), ModelCat::NavMesh);
+    }
 
     #[test]
     fn semver_comparison_works() {

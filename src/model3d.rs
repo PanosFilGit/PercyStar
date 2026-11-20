@@ -64,7 +64,7 @@ pub struct Mesh3D {
     z_buf: Vec<f32>,
     proj_buf: Vec<[f32; 3]>,
     tex: Option<TextureHandle>,
-    dirty: bool,
+    pub dirty: bool,
     last_dragging: bool,
 }
 
