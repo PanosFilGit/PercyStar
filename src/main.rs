@@ -1,8 +1,13 @@
 mod awc;
 mod model3d;
+mod tex;
 use model3d::{
     Mesh3D, decode_rage9_model_from_rpf, extract_0drpz_mesh, extract_rage9_model_name,
     is_vehicle_virtual, is_zlib_head, parse_obj, probe_large_rage9_model_in_buf, render_mesh3d_viewport,
+};
+use tex::{
+    DecodedTexture, build_dds_dx10, decode_navmesh_from_rpf, decode_rbf0, decode_ttpf_texture,
+    decode_txd_from_rpf, export_texture_png, inspect_gfx, probe_txd_header, scan_ttpf_descriptors,
 };
 use eframe::egui::{self, Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, RichText, Stroke, TextureHandle, TextureOptions};
 use flate2::{Decompress, FlushDecompress, Status};
@@ -154,6 +159,9 @@ enum Category {
     All,
     Vehicles,
     Models,
+    Textures,
+    Ui,
+    NavMesh,
     Videos,
     Audio,
     Xml,
@@ -194,6 +202,7 @@ struct MediaState {
     bink_hwnd: Option<isize>,
     bink_clip: Option<PathBuf>,
     loaded_mesh: Option<Mesh3D>,
+    loaded_textures: Option<Vec<DecodedTexture>>,
 }
 
 #[derive(Default)]
@@ -348,13 +357,17 @@ struct Rpf9App {
     clip_seq: u64,
     mesh3d: Option<Mesh3D>,
     show_3d: bool,
+    textures: Vec<DecodedTexture>,
+    tex_sel: usize,
+    tex_handle: Option<(usize, TextureHandle)>,
+    tex_zoom: f32,
     vehicles_only: bool,
     // cachd ui list so huge scans never re filter or clone evry fram
     view: Vec<usize>,
     view_key: Option<(u64, String, Category, String, bool)>,
     hay: Vec<String>,
     hay_ver: u64,
-    counts: [usize; 8],
+    counts: [usize; 11],
     cached_rpf_names: Vec<String>,
     last_rebuild: Instant,
     update: Arc<Mutex<UpdateState>>,
@@ -373,7 +386,7 @@ impl Rpf9App {
             selected_rpf: "All RPFs".into(),
             state: Arc::new(Mutex::new(ScanState {
                 header_info: "No archive or folder loaded".into(),
-                status: "Open an .rpf or select a game folder".into(),
+                status: "Open an .rpf/.ttpf or select a game folder".into(),
                 ..Default::default()
             })),
             media: Arc::new(Mutex::new(MediaState::default())),
@@ -389,12 +402,16 @@ impl Rpf9App {
             clip_seq: 0,
             mesh3d: None,
             show_3d: false,
+            textures: Vec::new(),
+            tex_sel: 0,
+            tex_handle: None,
+            tex_zoom: 1.0,
             vehicles_only: false,
             view: Vec::new(),
             view_key: None,
             hay: Vec::new(),
             hay_ver: u64::MAX,
-            counts: [0; 8],
+            counts: [0; 11],
             cached_rpf_names: Vec::new(),
             last_rebuild: Instant::now(),
             update: Arc::new(Mutex::new(UpdateState::default())),
@@ -426,6 +443,10 @@ impl Rpf9App {
         self.last_dock_rect = [0; 4];
         self.mesh3d = None;
         self.show_3d = false;
+        self.textures.clear();
+        self.tex_sel = 0;
+        self.tex_handle = None;
+        self.tex_zoom = 1.0;
         stop_wav();
         self.stop_bink_player();
         let mut m = self.media.lock().unwrap();
@@ -433,6 +454,73 @@ impl Rpf9App {
         m.status.clear();
         m.loading = false;
         m.loaded_mesh = None;
+        m.loaded_textures = None;
+    }
+
+    fn import_catalog_csv(&mut self, csv_path: &Path) {
+        let base_dir = self.target_path.as_ref().map(|p| {
+            if self.is_folder { p.clone() } else { p.parent().unwrap_or(p).to_path_buf() }
+        }).or_else(load_last_folder).unwrap_or_else(|| PathBuf::from(r"D:\Grand Theft Auto VI Build"));
+
+        let mut rpf_map: HashMap<String, PathBuf> = HashMap::new();
+        let mut all_paths = Vec::new();
+        collect_rpfs(&base_dir, &mut all_paths);
+        for p in all_paths {
+            if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+                rpf_map.insert(fname.to_ascii_lowercase(), p);
+            }
+        }
+
+        let Ok(f) = File::open(csv_path) else {
+            self.state.lock().unwrap().status = format!("Cannot open catalog: {}", csv_path.display());
+            return;
+        };
+        let mut added = 0usize;
+        let mut st = self.state.lock().unwrap();
+        let mut existing: std::collections::HashSet<(String, u64)> = st.entries.iter()
+            .map(|e| (e.rpf_name.to_ascii_lowercase(), e.offset))
+            .collect();
+
+        for (li, line) in BufReader::new(f).lines().flatten().enumerate() {
+            if li == 0 && line.starts_with("archive,") { continue; }
+            let cols: Vec<&str> = line.split(',').collect();
+            if cols.len() < 4 { continue; }
+            let arch = cols[0].trim();
+            let off_s = cols[1].trim().trim_start_matches("0x").trim_start_matches("0X");
+            let Ok(off) = u64::from_str_radix(off_s, 16) else { continue };
+            let raw_name = cols[2].trim();
+            let kind_ext = cols[3].trim();
+            if raw_name.is_empty() { continue; }
+
+            let arch_file = Path::new(arch).file_name().and_then(|s| s.to_str()).unwrap_or(arch);
+            let arch_lo = arch_file.to_ascii_lowercase();
+            let src_path = rpf_map.get(&arch_lo).cloned().unwrap_or_else(|| base_dir.join(arch));
+            if !existing.insert((arch_lo, off)) { continue; }
+
+            let name = if raw_name.contains(".#") {
+                raw_name.to_string()
+            } else {
+                format!("{raw_name}.#{kind_ext}")
+            };
+            st.entries.push(RpfEntry {
+                source_rpf: src_path,
+                rpf_name: arch_file.to_string(),
+                name,
+                kind: "MODEL",
+                offset: off,
+                comp_size: 0,
+                raw_size: 0,
+                tracks: 0,
+                chunks: Vec::new(),
+            });
+            if !st.rpf_names.iter().any(|r| r.eq_ignore_ascii_case(arch_file)) {
+                st.rpf_names.push(arch_file.to_string());
+            }
+            added += 1;
+        }
+        st.rpf_names.sort();
+        st.ver += 1;
+        st.status = format!("Imported {added} catalog models ({} total entries)", st.entries.len());
     }
 
     fn bump_gen(&self) -> u64 {
@@ -691,6 +779,90 @@ impl Rpf9App {
             return;
         }
 
+        if e.kind == "NAVM" {
+            let media = Arc::clone(&self.media);
+            {
+                let mut m = media.lock().unwrap();
+                m.loading = true;
+                m.status = format!("Decoding CNavMesh tile: {}...", e.name);
+            }
+            let src = e.source_rpf.clone();
+            let off = e.offset;
+            let nm = e.name.clone();
+            std::thread::spawn(move || {
+                match decode_navmesh_from_rpf(&src, off, &nm) {
+                    Ok(mesh) => {
+                        let mut m = media.lock().unwrap();
+                        m.loading = false;
+                        m.status.clear();
+                        m.loaded_mesh = Some(mesh);
+                    }
+                    Err(err) => {
+                        let mut m = media.lock().unwrap();
+                        m.loading = false;
+                        m.status = format!("NavMesh decode error ({nm}): {err}");
+                    }
+                }
+            });
+            return;
+        }
+
+        if e.kind == "TXD" {
+            let media = Arc::clone(&self.media);
+            {
+                let mut m = media.lock().unwrap();
+                m.loading = true;
+                m.status = format!("Deswizzling Xbox Scarlett TXD: {}...", e.name);
+            }
+            let src = e.source_rpf.clone();
+            let off = e.offset;
+            let nm = e.name.clone();
+            std::thread::spawn(move || {
+                match decode_txd_from_rpf(&src, off) {
+                    Ok(texs) => {
+                        let mut m = media.lock().unwrap();
+                        m.loading = false;
+                        m.status.clear();
+                        m.loaded_textures = Some(texs);
+                    }
+                    Err(err) => {
+                        let mut m = media.lock().unwrap();
+                        m.loading = false;
+                        m.status = format!("TXD decode error ({nm}): {err}");
+                    }
+                }
+            });
+            return;
+        }
+
+        if e.kind == "TTPF" {
+            let media = Arc::clone(&self.media);
+            {
+                let mut m = media.lock().unwrap();
+                m.loading = true;
+                m.status = format!("Decoding RDS5/ETPF texture: {}...", e.name);
+            }
+            let src = e.source_rpf.clone();
+            let tidx = e.tracks as usize;
+            let nm = e.name.clone();
+            std::thread::spawn(move || {
+                match decode_ttpf_texture(&src, tidx) {
+                    Ok(tex) => {
+                        let mut m = media.lock().unwrap();
+                        m.loading = false;
+                        m.status.clear();
+                        m.loaded_textures = Some(vec![tex]);
+                    }
+                    Err(err) => {
+                        let mut m = media.lock().unwrap();
+                        m.loading = false;
+                        m.status = format!("TTPF decode error ({nm}): {err}");
+                    }
+                }
+            });
+            return;
+        }
+
         if e.kind == "BK2" {
             let tmp = std::env::temp_dir().join("rpf9_preview_bk2");
             let _ = fs::create_dir_all(&tmp);
@@ -747,6 +919,10 @@ impl Rpf9App {
                             && sample.iter().all(|&b| (32..127).contains(&b) || matches!(b, 9 | 10 | 13 | 0x80..)));
                     if e.kind == "PSIN" {
                         self.preview = parse_psin(&data);
+                    } else if e.kind == "RBF0" {
+                        self.preview = decode_rbf0(&data).unwrap_or_else(|| format_hex(&data[..data.len().min(2048)]));
+                    } else if e.kind == "GFX" {
+                        self.preview = inspect_gfx(&data);
                     } else if is_text {
                         self.preview = String::from_utf8_lossy(&data[..data.len().min(250_000)]).into_owned();
                     } else {
@@ -784,10 +960,21 @@ impl Rpf9App {
             self.hay = st.entries.iter().map(|e| format!("{}|{}|{}", e.name, e.rpf_name, e.kind).to_lowercase()).collect();
             self.cached_rpf_names = st.rpf_names.clone();
             self.hay_ver = st.ver;
-            let mut c = [0usize; 8];
+            let mut c = [0usize; 11];
             for e in &st.entries {
                 c[0] += 1;
-                c[match e.kind { "VEH" => 1, "MODEL" => 2, "BK2" => 3, "AWC" => 4, "XML" => 5, "PSIN" => 6, _ => 7 }] += 1;
+                c[match e.kind {
+                    "VEH" => 1,
+                    "MODEL" => 2,
+                    "TXD" | "TTPF" => 3,
+                    "RBF0" | "GFX" => 4,
+                    "NAVM" => 5,
+                    "BK2" => 6,
+                    "AWC" => 7,
+                    "XML" => 8,
+                    "PSIN" => 9,
+                    _ => 10,
+                }] += 1;
             }
             self.counts = c;
         }
@@ -804,6 +991,9 @@ impl Rpf9App {
                     Category::All => true,
                     Category::Vehicles => e.kind == "VEH",
                     Category::Models => e.kind == "VEH" || (!self.vehicles_only && e.kind == "MODEL"),
+                    Category::Textures => e.kind == "TXD" || e.kind == "TTPF",
+                    Category::Ui => e.kind == "RBF0" || e.kind == "GFX",
+                    Category::NavMesh => e.kind == "NAVM",
                     Category::Videos => e.kind == "BK2",
                     Category::Audio => e.kind == "AWC",
                     Category::Xml => e.kind == "XML",
@@ -842,6 +1032,36 @@ impl Rpf9App {
                         ok += 1;
                     }
                 }
+            } else if e.kind == "NAVM" {
+                if let Ok(mesh) = decode_navmesh_from_rpf(&e.source_rpf, e.offset, &e.name) {
+                    let fname = format!("{}.obj", e.name.replace('#', ""));
+                    if mesh.export_obj(&out_dir.join(fname)).is_ok() {
+                        ok += 1;
+                    }
+                }
+            } else if e.kind == "TXD" {
+                if let Ok(texs) = decode_txd_from_rpf(&e.source_rpf, e.offset) {
+                    for t in &texs {
+                        let safe: String = t.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' }).collect();
+                        if export_texture_png(t, &out_dir.join(format!("{safe}.png"))).is_ok() {
+                            ok += 1;
+                        }
+                    }
+                }
+            } else if e.kind == "TTPF" {
+                if let Ok(t) = decode_ttpf_texture(&e.source_rpf, e.tracks as usize) {
+                    if export_texture_png(&t, &out_dir.join(format!("{}.png", t.name))).is_ok() {
+                        ok += 1;
+                    }
+                }
+            } else if e.kind == "RBF0" {
+                if let Ok(data) = read_entry_bytes(&e) {
+                    let xml = decode_rbf0(&data).unwrap_or_else(|| String::from_utf8_lossy(&data).into_owned());
+                    let fname = format!("{}.xml", e.name.trim_end_matches(".rbf"));
+                    if fs::write(out_dir.join(fname), xml).is_ok() {
+                        ok += 1;
+                    }
+                }
             } else if let Ok(data) = read_entry_bytes(&e) {
                 let fname = if self.is_folder { format!("{}_{}", e.rpf_name.trim_end_matches(".rpf"), e.name) } else { e.name.clone() };
                 if fs::write(out_dir.join(fname), &data).is_ok() {
@@ -864,7 +1084,7 @@ fn app_data_dir() -> Option<PathBuf> {
 }
 
 fn cache_file_path() -> Option<PathBuf> {
-    app_data_dir().map(|d| d.join("scan_cache_v4.tsv"))
+    app_data_dir().map(|d| d.join("scan_cache_v5.tsv"))
 }
 
 fn load_last_folder() -> Option<PathBuf> {
@@ -880,9 +1100,10 @@ fn save_last_folder(folder: &Path) {
     }
 }
 
-const CATS: [Category; 8] = [
-    Category::All, Category::Vehicles, Category::Models, Category::Videos,
-    Category::Audio, Category::Xml, Category::Resources, Category::Binary,
+const CATS: [Category; 11] = [
+    Category::All, Category::Vehicles, Category::Models, Category::Textures,
+    Category::Ui, Category::NavMesh, Category::Videos, Category::Audio,
+    Category::Xml, Category::Resources, Category::Binary,
 ];
 
 fn save_ui_state(app: &Rpf9App) {
@@ -917,6 +1138,11 @@ fn load_disk_cache() -> HashMap<String, Vec<RpfEntry>> {
         let kind: &'static str = match cols[4] {
             "VEH" => "VEH",
             "MODEL" => "MODEL",
+            "TXD" => "TXD",
+            "TTPF" => "TTPF",
+            "RBF0" => "RBF0",
+            "GFX" => "GFX",
+            "NAVM" => "NAVM",
             "BK2" => "BK2",
             "AWC" => "AWC",
             "XML" => "XML",
@@ -985,7 +1211,7 @@ fn collect_rpfs(dir: &Path, out: &mut Vec<PathBuf>) {
             let p = entry.path();
             if ft.is_dir() {
                 collect_rpfs(&p, out);
-            } else if ft.is_file() && p.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("rpf")).unwrap_or(false) {
+            } else if ft.is_file() && p.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("rpf") || s.eq_ignore_ascii_case("ttpf")).unwrap_or(false) {
                 out.push(p);
             }
         }
@@ -1065,6 +1291,11 @@ fn kind_color(kind: &str) -> Color32 {
     match kind {
         "VEH" => Color32::from_rgb(255, 85, 175),
         "MODEL" => Color32::from_rgb(130, 175, 255),
+        "TXD" => Color32::from_rgb(64, 235, 225),
+        "TTPF" => Color32::from_rgb(48, 205, 255),
+        "RBF0" => Color32::from_rgb(255, 145, 72),
+        "GFX" => Color32::from_rgb(255, 115, 130),
+        "NAVM" => Color32::from_rgb(125, 235, 110),
         "XML" => Color32::from_rgb(72, 210, 255),
         "AWC" => Color32::from_rgb(90, 235, 165),
         "BK2" => Color32::from_rgb(252, 175, 23),
@@ -1157,7 +1388,7 @@ fn read_entry_bytes(e: &RpfEntry) -> std::io::Result<Vec<u8>> {
         f.seek(SeekFrom::Start(e.offset))?;
         let mut raw = vec![0u8; e.comp_size as usize];
         f.read_exact(&mut raw)?;
-        if matches!(e.kind, "XML" | "PSIN" | "ZLIB") {
+        if matches!(e.kind, "XML" | "PSIN" | "RBF0" | "GFX" | "ZLIB") {
             let mut out = Vec::new();
             ZlibDecoder::new(&raw[..]).read_to_end(&mut out)?;
             Ok(out)
@@ -1189,13 +1420,8 @@ fn probe_rage9_page(
     probe_dec: &mut Decompress,
     probe_out: &mut [u8],
 ) -> Option<RpfEntry> {
-    let h0 = u64::from_le_bytes(buf[pos..pos + 8].try_into().ok()?);
-    let h1 = u64::from_le_bytes(buf[pos + 8..pos + 16].try_into().ok()?);
-    if h0 != 0 || h1 != 0 {
-        return None;
-    }
     let p = pos + 0x10;
-    if !is_zlib_head(&buf[p..read_n]) {
+    if p + 8 > read_n || !is_zlib_head(&buf[p..read_n]) {
         return None;
     }
     let end = (p + 32768).min(read_n);
@@ -1208,6 +1434,47 @@ fn probe_rage9_page(
     if vft != 0 || !(0x5000_0000..0x5800_0000).contains(&bmap) || &probe_out[0x10..0x15] == b"0DRPz" {
         return None;
     }
+    // 1. GTA VI CNavMesh tile (version 0x00010015)
+    let ver = u32::from_le_bytes(probe_out[0x14..0x18].try_into().ok()?);
+    if ver == 0x0001_0015 && olen >= 0xD0 {
+        let n_polys = u32::from_le_bytes(probe_out[0xC4..0xC8].try_into().ok()?);
+        let midx = u32::from_le_bytes(probe_out[0xC8..0xCC].try_into().ok()?);
+        let nm = if midx < 512 * 512 {
+            let gx = (midx % 512) as i32;
+            let gy = (midx / 512) as i32;
+            let wx = (gx - 256) * 128;
+            let wy = (gy - 256) * 128;
+            format!("nav_{gx:03}_{gy:03}_({wx},{wy}).ynv")
+        } else {
+            format!("nav_dyn_{midx:06x}.ynv")
+        };
+        return Some(RpfEntry {
+            source_rpf: path.to_path_buf(),
+            rpf_name: rname.to_string(),
+            name: nm,
+            kind: "NAVM",
+            offset: off + p as u64,
+            comp_size: probe_dec.total_in(),
+            raw_size: olen as u64,
+            tracks: n_polys,
+            chunks: Vec::new(),
+        });
+    }
+    // 2. pgDictionary<grcTexture> (.#td texture dictionary)
+    if let Some((txd_name, tex_cnt)) = probe_txd_header(&probe_out[..olen]) {
+        return Some(RpfEntry {
+            source_rpf: path.to_path_buf(),
+            rpf_name: rname.to_string(),
+            name: txd_name,
+            kind: "TXD",
+            offset: off + p as u64,
+            comp_size: probe_dec.total_in(),
+            raw_size: olen as u64,
+            tracks: tex_cnt as u32,
+            chunks: Vec::new(),
+        });
+    }
+    // 3. Drawable / FragType 3D Model (.#dr / .#ft / .#dd)
     let (mname, is_veh, vlen) = if (bmap - 0x5000_0000) >= 32768 {
         probe_large_rage9_model_in_buf(&buf[p..read_n], path, off + p as u64)?
     } else {
@@ -1286,6 +1553,27 @@ fn scan_levels_vehicle_zone(levels_rpf: &PathBuf, live_state: Option<&Arc<Mutex<
 }
 
 fn scan_single_rpf(path: &PathBuf, progress_state: Option<&Arc<Mutex<ScanState>>>) -> std::io::Result<(String, Vec<RpfEntry>)> {
+    if path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("ttpf")).unwrap_or(false) {
+        let rname = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let (info, descs) = scan_ttpf_descriptors(path)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        if let Some(st) = progress_state {
+            st.lock().unwrap().header_info = info.clone();
+        }
+        let entries: Vec<RpfEntry> = descs.into_iter().map(|d| RpfEntry {
+            source_rpf: path.clone(),
+            rpf_name: rname.clone(),
+            name: format!("tex_{:05}_{}x{}_f{:02x}{}.ttpf", d.idx, d.w, d.h, d.fmt_byte, if d.has_mips { "_mip" } else { "" }),
+            kind: "TTPF",
+            offset: d.byte_off,
+            comp_size: d.alloc_sz,
+            raw_size: d.alloc_sz,
+            tracks: d.idx as u32,
+            chunks: Vec::new(),
+        }).collect();
+        return Ok((info, entries));
+    }
+
     let mut f = File::open(path)?;
     let sz = f.metadata()?.len();
     let rname = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -1445,6 +1733,10 @@ fn scan_single_rpf(path: &PathBuf, progress_state: Option<&Arc<Mutex<ScanState>>
                             let (kind, name) = if head.starts_with(b"<?xml") || head.starts_with(b"<") {
                                 let tag = extract_xml_tag(&stitch_head[trimmed..]).unwrap_or_else(|| "config".into());
                                 ("XML", format!("{z_idx:04}_{tag}.xml"))
+                            } else if stitch_head.starts_with(b"RBF0") {
+                                ("RBF0", format!("{z_idx:04}_ui.rbf"))
+                            } else if stitch_head.starts_with(b"GFX") {
+                                ("GFX", format!("{z_idx:04}_scaleform.gfx"))
                             } else if stitch_head.starts_with(b"PSIN") {
                                 ("PSIN", format!("{z_idx:04}_resource.psin"))
                             } else {
@@ -1480,8 +1772,18 @@ impl eframe::App for Rpf9App {
         let (media_loading, media_status, awc_streams) = {
             let mut m = self.media.lock().unwrap();
             if let Some(mesh) = m.loaded_mesh.take() {
+                self.textures.clear();
+                self.tex_handle = None;
                 self.mesh3d = Some(mesh);
                 self.show_3d = true;
+            }
+            if let Some(texs) = m.loaded_textures.take() {
+                self.mesh3d = None;
+                self.show_3d = false;
+                self.textures = texs;
+                self.tex_sel = 0;
+                self.tex_handle = None;
+                self.tex_zoom = 1.0;
             }
             (m.loading, m.status.clone(), m.awc_streams.clone())
         };
@@ -1511,8 +1813,8 @@ impl eframe::App for Rpf9App {
                         self.start_folder_scan(folder);
                     }
                 }
-                if ui.button("Open .RPF").clicked() {
-                    if let Some(p) = rfd::FileDialog::new().add_filter("RPF Archives", &["rpf"]).pick_file() {
+                if ui.button("Open Archive").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().add_filter("RPF / TTPF Archives", &["rpf", "ttpf"]).pick_file() {
                         self.start_single_scan(p);
                     }
                 }
@@ -1520,9 +1822,16 @@ impl eframe::App for Rpf9App {
                     if let Some(p) = rfd::FileDialog::new().add_filter("OBJ 3D Model", &["obj"]).pick_file() {
                         if let Some(m) = parse_obj(&p) {
                             self.stop_bink_player();
+                            self.textures.clear();
+                            self.tex_handle = None;
                             self.mesh3d = Some(m);
                             self.show_3d = true;
                         }
+                    }
+                }
+                if ui.button("Import Catalog").clicked() {
+                    if let Some(p) = rfd::FileDialog::new().add_filter("Models Catalog CSV", &["csv"]).pick_file() {
+                        self.import_catalog_csv(&p);
                     }
                 }
                 if self.is_folder && ui.button("Rescan").clicked() {
@@ -1575,11 +1884,14 @@ impl eframe::App for Rpf9App {
                 (Category::All, "All Files", c[0]),
                 (Category::Vehicles, "Vehicles (.#ft)", c[1]),
                 (Category::Models, "3D Models (.#dr/.#ft)", c[2] + c[1]),
-                (Category::Videos, "Videos (.bk2)", c[3]),
-                (Category::Audio, "Audio (.awc)", c[4]),
-                (Category::Xml, "Configs (.xml)", c[5]),
-                (Category::Resources, "Resources (.psin)", c[6]),
-                (Category::Binary, "Binary (.bin)", c[7]),
+                (Category::Textures, "Textures (.#td/.ttpf)", c[3]),
+                (Category::Ui, "UI (RBF0/GFX)", c[4]),
+                (Category::NavMesh, "NavMesh (.ynv)", c[5]),
+                (Category::Videos, "Videos (.bk2)", c[6]),
+                (Category::Audio, "Audio (.awc)", c[7]),
+                (Category::Xml, "Configs (.xml)", c[8]),
+                (Category::Resources, "Resources (.psin)", c[9]),
+                (Category::Binary, "Binary (.bin)", c[10]),
             ] {
                 if ui.selectable_label(self.category == cat, format!("{label} ({count})")).clicked() {
                     self.category = cat;
@@ -1707,6 +2019,74 @@ impl eframe::App for Rpf9App {
                 });
             } else if !media_status.is_empty() {
                 ui.label(RichText::new(&media_status).color(Color32::from_rgb(255, 140, 120)));
+            } else if !self.textures.is_empty() {
+                if self.tex_sel >= self.textures.len() {
+                    self.tex_sel = 0;
+                }
+                let t = &self.textures[self.tex_sel];
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&t.name).strong().color(Color32::from_rgb(255, 168, 28)));
+                    ui.label(RichText::new(format!("{}x{} · {} · mips={}", t.w, t.h, t.fmt_name, t.mips)).color(Color32::from_rgb(170, 210, 235)));
+                    ui.add(egui::Slider::new(&mut self.tex_zoom, 0.25..=4.0).text("Zoom").fixed_decimals(2));
+                    if ui.button("Export PNG").clicked() {
+                        let safe: String = t.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' }).collect();
+                        if let Some(p) = rfd::FileDialog::new().set_file_name(format!("{safe}.png")).add_filter("PNG Image", &["png"]).save_file() {
+                            if let Err(err) = export_texture_png(t, &p) {
+                                self.state.lock().unwrap().status = err;
+                            } else {
+                                self.state.lock().unwrap().status = format!("Saved {}", p.display());
+                            }
+                        }
+                    }
+                    if ui.button("Export DDS").clicked() {
+                        let safe: String = t.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' }).collect();
+                        if let Some(p) = rfd::FileDialog::new().set_file_name(format!("{safe}.dds")).add_filter("DirectDraw Surface", &["dds"]).save_file() {
+                            let dds = build_dds_dx10(t.w, t.h, t.dxgi, &t.raw_dds_payload);
+                            if let Err(err) = fs::write(&p, &dds) {
+                                self.state.lock().unwrap().status = format!("DDS write error: {err}");
+                            } else {
+                                self.state.lock().unwrap().status = format!("Saved {}", p.display());
+                            }
+                        }
+                    }
+                });
+                if self.textures.len() > 1 {
+                    ui.horizontal(|ui| {
+                        if ui.button("◀").clicked() {
+                            self.tex_sel = if self.tex_sel == 0 { self.textures.len() - 1 } else { self.tex_sel - 1 };
+                        }
+                        ui.label(RichText::new(format!("{}/{}", self.tex_sel + 1, self.textures.len())).color(Color32::from_rgb(190, 180, 215)));
+                        if ui.button("▶").clicked() {
+                            self.tex_sel = (self.tex_sel + 1) % self.textures.len();
+                        }
+                        egui::ScrollArea::horizontal().id_salt("txd_strip").show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (i, item) in self.textures.iter().enumerate() {
+                                    if ui.selectable_label(self.tex_sel == i, format!("{} ({}x{})", item.name, item.w, item.h)).clicked() {
+                                        self.tex_sel = i;
+                                    }
+                                }
+                            });
+                        });
+                    });
+                }
+                ui.separator();
+                let need_upload = self.tex_handle.as_ref().map(|(idx, _)| *idx != self.tex_sel).unwrap_or(true);
+                if need_upload {
+                    let cur = &self.textures[self.tex_sel];
+                    let ci = ColorImage { size: [cur.w, cur.h], pixels: cur.pixels.clone() };
+                    let h = ctx.load_texture(format!("percystar_tex_{}", self.tex_sel), ci, TextureOptions::LINEAR);
+                    self.tex_handle = Some((self.tex_sel, h));
+                }
+                if let Some((_, handle)) = &self.tex_handle {
+                    let cur = &self.textures[self.tex_sel];
+                    let avail = ui.available_size();
+                    let fit = (avail.x / cur.w as f32).min(avail.y / cur.h as f32).min(1.0).max(0.05);
+                    let disp = egui::vec2(cur.w as f32 * fit * self.tex_zoom, cur.h as f32 * fit * self.tex_zoom);
+                    egui::ScrollArea::both().show(ui, |ui| {
+                        ui.image((handle.id(), disp));
+                    });
+                }
             } else if let Some(mesh) = self.mesh3d.as_mut() {
                 let mut toggle_3d = self.show_3d;
                 ui.horizontal(|ui| {
@@ -1790,6 +2170,118 @@ mod tests {
         assert!(parse_semver("1.1.0") > parse_semver("1.0.99"));
         assert!(parse_semver("v1.0.3") == parse_semver("1.0.3"));
         assert!(parse_semver("bad").is_none());
+    }
+
+    #[test]
+    fn deswizzle_and_ui_decoders_work() {
+        // 4KB SW_4KB_D bijective permutation test on 64x64 BC7 (16x16 blocks, 1 tile)
+        let mut raw = vec![0u8; 4096];
+        for blk in 0..256 {
+            raw[blk * 16] = blk as u8;
+        }
+        let lin = tex::deswizzle_4kb_d(&raw, 64, 64, true, 16);
+        assert_eq!(lin.len(), 4096);
+        let mut seen = [false; 256];
+        for blk in 0..256 {
+            seen[lin[blk * 16] as usize] = true;
+        }
+        assert!(seen.iter().all(|&b| b), "SW_4KB_D 128bpp must be a full bijection");
+
+        // 64KB TTPF bijective permutation test on 256x256 BC7 (64x64 blocks, 1 tile)
+        let mut raw64 = vec![0u8; 65536];
+        for blk in 0..4096 {
+            raw64[blk * 16] = (blk & 0xFF) as u8;
+            raw64[blk * 16 + 1] = ((blk >> 8) & 0xFF) as u8;
+        }
+        let lin64 = tex::deswizzle_64kb_ttpf(&raw64, 256, 256, 16);
+        assert_eq!(lin64.len(), 65536);
+        let mut seen64 = vec![false; 4096];
+        for blk in 0..4096 {
+            let v = (lin64[blk * 16] as usize) | ((lin64[blk * 16 + 1] as usize) << 8);
+            seen64[v] = true;
+        }
+        assert!(seen64.iter().all(|&b| b), "TTPF 64KB 128bpp must be a full bijection");
+
+        // RBF0 GTA6 header (0xFB 0xFF 0x01 0x00) decode test
+        let mut rbf = Vec::new();
+        rbf.extend_from_slice(b"RBF0");
+        rbf.extend_from_slice(&[0xFB, 0xFF, 0x01, 0x00]); // GTA6 header
+        rbf.extend_from_slice(&[0x00, 0x00, 0x04, 0x00]); // idx=0, struct, name len=4
+        rbf.extend_from_slice(b"Root");
+        rbf.extend_from_slice(&[0u8; 6]); // struct header
+        rbf.extend_from_slice(&[0x01, 0x10, 0x02, 0x00]); // idx=1, u32 attr, len=2
+        rbf.extend_from_slice(b"id");
+        rbf.extend_from_slice(&42u32.to_le_bytes());
+        rbf.extend_from_slice(&[0xFF, 0xFF]); // close Root
+        let xml = decode_rbf0(&rbf).expect("RBF0 should decode");
+        assert!(xml.contains("<Root id=\"42\" />"), "got: {xml}");
+
+        // Scaleform GFX inspector test
+        let mut gfx = Vec::new();
+        gfx.extend_from_slice(b"GFX\x2a");
+        gfx.extend_from_slice(&128u32.to_le_bytes());
+        gfx.extend_from_slice(b"\0com.rockstargames.gtav.HudMap\0");
+        let dump = inspect_gfx(&gfx);
+        assert!(dump.contains("Version: 42"));
+        assert!(dump.contains("com.rockstargames.gtav.HudMap"));
+    }
+
+    #[test]
+    fn real_gta6_archives_smoke_test() {
+        let base = Path::new(r"D:\Grand Theft Auto VI Build");
+        if !base.exists() { return; }
+
+        // 1. TTPF native scan + decode
+        let ttpf = base.join("platform.ttpf");
+        if ttpf.exists() {
+            let (info, descs) = scan_ttpf_descriptors(&ttpf).expect("scan platform.ttpf");
+            assert!(!descs.is_empty(), "platform.ttpf descriptors empty: {info}");
+            let mut decoded_ok = 0usize;
+            for d in descs.iter().take(25) {
+                if let Ok(t) = decode_ttpf_texture(&ttpf, d.idx) {
+                    assert_eq!(t.pixels.len(), t.w * t.h);
+                    decoded_ok += 1;
+                    if decoded_ok >= 3 { break; }
+                }
+            }
+            assert!(decoded_ok >= 1, "expected at least 1 decoded texture from platform.ttpf");
+        }
+
+        // 2. TXD native scan + decode from textures.rpf
+        let tex_rpf = base.join("textures.rpf");
+        if tex_rpf.exists() {
+            let (_, entries) = scan_single_rpf(&tex_rpf, None).expect("scan textures.rpf");
+            let txds: Vec<&RpfEntry> = entries.iter().filter(|e| e.kind == "TXD").collect();
+            assert!(!txds.is_empty(), "textures.rpf should yield TXD entries");
+            let t0 = decode_txd_from_rpf(&tex_rpf, txds[0].offset).expect("decode first TXD");
+            assert!(!t0.is_empty());
+            assert_eq!(t0[0].pixels.len(), t0[0].w * t0[0].h);
+        }
+
+        // 3. CNavMesh 3D decode from navmeshes.rpf (first CNavMesh block starts at ~750MB after path regions)
+        let nav_rpf = base.join("navmeshes.rpf");
+        if nav_rpf.exists() {
+            let mut f = File::open(&nav_rpf).unwrap();
+            let base_off = 786_010_112u64; // page holding first CNavMesh tile (786010128 - 0x10)
+            f.seek(SeekFrom::Start(base_off)).unwrap();
+            let mut buf = vec![0u8; 256 * 1024];
+            let n = f.read(&mut buf).unwrap();
+            let mut dec = Decompress::new(true);
+            let mut out = vec![0u8; 32768];
+            let e = probe_rage9_page(&buf, 0, n, base_off, &nav_rpf, "navmeshes.rpf", &mut dec, &mut out)
+                .expect("should detect NAVM in navmeshes.rpf");
+            assert_eq!(e.kind, "NAVM");
+            assert!(e.name.starts_with("nav_160_179_"), "got {}", e.name);
+            let mesh = decode_navmesh_from_rpf(&nav_rpf, e.offset, &e.name).expect("decode NAVM mesh");
+            assert!(!mesh.verts.is_empty() && !mesh.tris.is_empty());
+        }
+
+        // 4. packs.rpf catalog model decode (verifies +0xA8 name + SW_4KB_D embedded tex)
+        let packs_rpf = base.join("packs.rpf");
+        if packs_rpf.exists() {
+            let mesh = decode_rage9_model_from_rpf(&packs_rpf, 0x47ab1010, "fallback").expect("decode packs.rpf model");
+            assert!(!mesh.verts.is_empty() && !mesh.tris.is_empty());
+        }
     }
 }
 

@@ -389,7 +389,7 @@ fn read_virtual_from_file(f: &mut File, file_off: u64) -> Result<(Vec<u8>, u64, 
     Ok((v, next_off, p_cnt))
 }
 
-// finds dr ft dd modle string in virtual buffr
+// finds dr ft dd modle string in virtual buffr (also checks drawable +0xa8 name ptr!)
 pub fn extract_rage9_model_name(v: &[u8]) -> Option<(String, &'static str)> {
     let mut i = 1usize;
     while i + 2 < v.len() {
@@ -419,6 +419,28 @@ pub fn extract_rage9_model_name(v: &[u8]) -> Option<(String, &'static str)> {
             }
         }
         i += 1;
+    }
+    // Fallback: RAGE9 gtaDrawable name pointer at +0xa8 (catches 3,000+ models without .#dr suffix!)
+    if v.len() >= 0xb0 {
+        if let Some(no) = vptr(ru64(v, 0xa8)) {
+            if no < v.len() {
+                if let Some(rel) = v[no..].iter().position(|&b| b == 0) {
+                    if (2..=96).contains(&rel) {
+                        let s = &v[no..no + rel];
+                        if s.iter().all(|&b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'#'))
+                            && s.iter().any(|b| b.is_ascii_alphabetic())
+                        {
+                            let nm = String::from_utf8_lossy(s).trim_end_matches('.').to_string();
+                            if nm.len() >= 2 {
+                                let ext = if nm.ends_with(".#ft") { ".#ft" } else { ".#dr" };
+                                let full = if nm.contains(".#") { nm } else { format!("{nm}.#dr") };
+                                return Some((full, ext));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     None
 }
@@ -557,39 +579,6 @@ fn collect_all_geoms(v: &[u8]) -> Vec<(usize, usize, usize, usize)> {
     out
 }
 
-fn decode_bc1_block(blk: &[u8], out: &mut [Color32], stride: usize, bx: usize, by: usize, w: usize, h: usize) {
-    let c0 = ru16(blk, 0);
-    let c1 = ru16(blk, 2);
-    let bits = ru32(blk, 4);
-    let rgb565 = |c: u16| -> [u8; 3] {
-        [(((c >> 11) & 31) * 255 / 31) as u8, (((c >> 5) & 63) * 255 / 63) as u8, ((c & 31) * 255 / 31) as u8]
-    };
-    let a = rgb565(c0);
-    let b = rgb565(c1);
-    let lerp = |w0: u16, w1: u16, div: u16| -> [u8; 3] {
-        [
-            ((w0 * a[0] as u16 + w1 * b[0] as u16) / div) as u8,
-            ((w0 * a[1] as u16 + w1 * b[1] as u16) / div) as u8,
-            ((w0 * a[2] as u16 + w1 * b[2] as u16) / div) as u8,
-        ]
-    };
-    let pal = if c0 > c1 {
-        [a, b, lerp(2, 1, 3), lerp(1, 2, 3)]
-    } else {
-        [a, b, lerp(1, 1, 2), [0, 0, 0]]
-    };
-    for py in 0..4 {
-        let y = by + py;
-        if y >= h { continue; }
-        for px in 0..4 {
-            let x = bx + px;
-            if x >= w { continue; }
-            let c = pal[((bits >> (2 * (py * 4 + px))) & 3) as usize];
-            out[y * stride + x] = Color32::from_rgb(c[0], c[1], c[2]);
-        }
-    }
-}
-
 fn try_extract_embedded_texture(v: &[u8], p: &[u8]) -> (Option<Texture2D>, String) {
     let mut bases = vec![0usize];
     if v.len() >= 0x20 {
@@ -602,35 +591,21 @@ fn try_extract_embedded_texture(v: &[u8], p: &[u8]) -> (Option<Texture2D>, Strin
         let Some(sg) = vptr(ru64(v, base + 0x10)) else { continue };
         if sg + 0x10 > v.len() { continue; }
         let Some(txd) = vptr(ru64(v, sg + 0x08)) else { continue };
-        if txd + 0x3a > v.len() { continue; }
-        let Some(tarr) = vptr(ru64(v, txd + 0x30)) else { continue };
-        let tcnt = ru16(v, txd + 0x38) as usize;
-        if tcnt == 0 || tcnt > 256 || tarr + tcnt * 8 > v.len() { continue; }
-
-        for ti in 0..tcnt {
-            let Some(tp) = vptr(ru64(v, tarr + ti * 8)) else { continue };
-            if tp + 0x48 > v.len() { continue; }
-            let Some(poff) = pptr(ru64(v, tp + 0x18)) else { continue };
-            let w = ru16(v, tp + 0x38) as usize;
-            let h = ru16(v, tp + 0x3a) as usize;
-            let dxgi = v[tp + 0x3f];
-            if !(16..=2048).contains(&w) || !(16..=2048).contains(&h) { continue; }
-            let bx_cnt = (w + 3) / 4;
-            let by_cnt = (h + 3) / 4;
-            let (blk_sz, rgb_off) = match dxgi {
-                70..=72 => (8usize, 0usize),
-                73..=78 => (16usize, 8usize),
-                _ => continue,
-            };
-            if poff + bx_cnt * by_cnt * blk_sz > p.len() { continue; }
-            let mut pixels = vec![Color32::from_rgb(160, 165, 175); w * h];
-            for by in 0..by_cnt {
-                for bx in 0..bx_cnt {
-                    let bo = poff + (by * bx_cnt + bx) * blk_sz + rgb_off;
-                    decode_bc1_block(&p[bo..bo + 8], &mut pixels, w, bx * 4, by * 4, w, h);
-                }
-            }
-            return (Some(Texture2D { w, h, pixels }), format!("Embedded {w}x{h} (fmt {dxgi})"));
+        // Use our verified Xbox Scarlett SW_4KB_D + reverse-mip + pure-Rust BC7/BC3/BC1 decoder!
+        let decoded = crate::tex::extract_txd_textures(v, p, txd);
+        if !decoded.is_empty() {
+            // Prefer diffuse/albedo texture over normal/spec/blank if multiple embedded
+            let best = decoded
+                .iter()
+                .find(|t| {
+                    let lo = t.name.to_ascii_lowercase();
+                    !lo.contains("_n") && !lo.contains("_nm") && !lo.contains("_s") && !lo.contains("blank") && t.w >= 32
+                })
+                .unwrap_or(&decoded[0]);
+            return (
+                Some(crate::tex::to_model_tex(best)),
+                format!("Embedded {} ({}x{} {}, {}/{})", best.name, best.w, best.h, best.fmt_name, 1, decoded.len()),
+            );
         }
     }
     (None, "External .#td (Material Shading)".into())
