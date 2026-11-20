@@ -220,64 +220,182 @@ fn model_cat_tag(c: ModelCat) -> (&'static str, Color32) {
     }
 }
 
+fn is_map_zone_prefix(p0: &str) -> bool {
+    let b = p0.as_bytes();
+    if b.len() >= 3 && b.len() <= 6 && b[0].is_ascii_alphabetic() {
+        let alpha_end = b.iter().position(|c| !c.is_ascii_alphabetic()).unwrap_or(b.len());
+        if (1..=2).contains(&alpha_end) && alpha_end < b.len() && b[alpha_end].is_ascii_digit() {
+            let dig_end = b[alpha_end..]
+                .iter()
+                .position(|c| !c.is_ascii_digit())
+                .map(|i| alpha_end + i)
+                .unwrap_or(b.len());
+            let digits = dig_end - alpha_end;
+            let trail = b.len() - dig_end;
+            if digits >= 1 && trail <= 1 && (trail == 0 || b[dig_end].is_ascii_alphabetic()) {
+                return matches!(
+                    &p0[..alpha_end],
+                    "n" | "s" | "tw" | "bk" | "dn" | "vk" | "ky" | "fi" | "vi" | "ap" | "ds"
+                        | "fh" | "ss" | "tr" | "sb" | "le" | "id" | "sn" | "nm" | "po" | "nb"
+                        | "ma" | "lo" | "td" | "ec" | "sj"
+                );
+            }
+        }
+    }
+    false
+}
+
+fn match_known_stem(p0: &str, stems: &[&str]) -> bool {
+    stems.contains(&p0) || (p0.len() > 4 && stems.contains(&&p0[1..]))
+}
+
 fn classify_model_cat(kind: &str, name: &str) -> ModelCat {
     if kind == "NAVM" {
         return ModelCat::NavMesh;
     }
     let lo = name.to_ascii_lowercase();
+    let p0 = lo.split('_').next().unwrap_or("").split('.').next().unwrap_or("");
     let has = |pats: &[&str]| pats.iter().any(|p| lo.contains(p));
-    if has(&[
-        "plane", "heli", "chopper", "jet_", "seaplane", "blimp", "boat", "yacht",
-        "ship", "skiff", "airboat", "kayak", "seashark", "submar", "hovercraft", "dinghy",
-    ]) {
-        return ModelCat::AircraftBoats;
+    let starts = |pats: &[&str]| pats.iter().any(|p| lo.starts_with(p));
+
+    // 1. Animals: exact RAGE 9 creature taxonomy ONLY (crm_=mammal, crb_=bird, crf_=fish, crr_=reptile, cra_=amphibian, crc_=crustacean, cri_=insect)
+    if starts(&["crm_", "crb_", "crf_", "crr_", "cra_", "crc_", "cri_"]) {
+        return ModelCat::Animals;
     }
-    if has(&[
-        "w_ar_", "w_pi_", "w_sg_", "w_sr_", "w_sb_", "w_me_", "w_lr_", "w_ex_",
-        "w_mg_", "w_am_", "weap", "rifle", "pistol", "shotgun", "sniper", "grenade",
-        "machete", "silencer", "suppressor", "holster", "gun_", "_gun",
+
+    // 2. Weapons: explicit weapon prefixes, vehicle weapon mounts, & gunshop weapon displays
+    if starts(&[
+        "w_preset_", "wpn_", "w_ar_", "w_pi_", "w_sg_", "w_sr_", "w_sb_", "w_me_",
+        "w_lr_", "w_ex_", "w_mg_", "w_am_", "weap_", "weapon_",
+    ]) || has(&[
+        "_weap", "_weapon", "mint_widget_gun_", "prop_am_weapon_",
+        "mint_display_weapon_", "mint_display_bag_rifle_", "mint_gun_counter_",
     ]) {
         return ModelCat::Weapons;
     }
-    if has(&[
-        "alligator", "gator", "tiger", "snake", "shark", "deer", "bear", "boar",
-        "pig_", "dog_", "cat_", "horse", "cow_", "bird", "duck", "seagull",
-        "pelican", "flamingo", "fish", "dolphin", "whale", "turtle", "frog",
-        "chimp", "monkey", "crr_", "crf_", "animal", "crab", "rat_", "crow",
-    ]) {
-        return ModelCat::Animals;
+
+    // 3. Props & World map sectors FIRST so props/buildings never leak into vehicles/clothing/characters/air&sea
+    if starts(&["prop_", "cvar_"]) {
+        return ModelCat::Props;
     }
-    if kind == "VEH"
-        || has(&[
-            "veh_", "car_", "truck", "bike", "moto", "taxi", "police", "ambulance",
-            "firetruck", "bus_", "trailer", "forklift", "excavator", "tractor", "tank",
-            "van_", "suv_", "coupe", "sedan", "wheel_", "chassis",
-        ])
+    let has_ped_rig = has(&["_mr1_", "_fr1_", "_mb1_", "_fb1_", "_mo1_", "_fo1_"]);
+    if !has_ped_rig
+        && (starts(&[
+            "prefab_", "mint_", "int_", "veg_", "maptile_", "glass_", "sea_tr_", "sea_city_",
+            "sea_cruise_", "a_bfyb", "a_tl_", "ie_", "lo_", "ma_", "nb_", "ds_", "fh_", "bk_",
+            "dn_", "vk_", "ky_", "fi_", "vi_", "ap_", "ss_", "tr_", "sb_", "le_", "id_", "sn_",
+            "nm_", "po_", "tw_",
+        ]) || is_map_zone_prefix(p0))
     {
-        return ModelCat::Vehicles;
+        return ModelCat::World;
     }
-    if has(&[
-        "shirt", "jacket", "coat", "pant", "jean", "short", "dress", "skirt",
-        "shoe", "boot", "sneaker", "hat_", "cap_", "glasses", "watch", "ring_",
-        "necklace", "chain_", "backpack", "mask_", "helmet", "vest_", "bodice",
-        "corset", "tights", "stocking", "glove", "hoodie", "jersey", "bikini", "swim",
-    ]) {
+
+    // 4. Ped collision/bounds helpers (filtered out when "Hide LODs & Bounds" is ON)
+    if lo.contains("bipedbounds") || starts(&["collision_", "char_boundprims", "char_z_z_physics"]) {
+        if has(&[
+            "skirt", "shirt", "pant", "shoe", "boot", "hat", "cap", "glasses", "shades",
+            "watch", "ring", "mask", "helmet", "vest", "dress", "jacket", "coat", "short",
+            "jean", "bra", "bikini", "undies", "glove", "apron", "armor", "bag", "sock",
+            "belt", "neckwear", "scarf", "hoodie", "suit", "tights", "legging", "swim",
+            "sandal", "flipflop", "loafer", "sneaker", "bandana", "bracelet", "earring",
+            "piercing", "headwear", "accs_", "bodice", "corset",
+        ]) {
+            return ModelCat::Clothing;
+        }
+        return ModelCat::Characters;
+    }
+
+    // 5. Clothing vs Characters: strictly ped-rigged (_mr1_/_fr1_/etc.) & gmt_ garments — never car skirts or boat parts
+    if lo.starts_with("gmt_") {
         return ModelCat::Clothing;
     }
-    if has(&[
-        "cs_", "ig_", "player", "lucia", "jason", "head_", "face_", "hair", "beard",
-        "bodygenital", "body_", "torso", "gore_", "ped_", "_mr1_", "_fr1_", "_mb1_",
-        "_fb1_", "_mo1_", "_fo1_", "eyebrow", "eyelash", "teeth",
+    if starts(&[
+        "head_", "hc_", "cs_", "ig_", "player_", "u_m_", "u_f_", "a_m_", "a_f_", "s_m_",
+        "s_f_", "g_m_", "g_f_", "legacyped", "gore", "bodygenital", "bodynipple", "sc_alien",
+        "hand_", "feet_", "eyebrow", "eyelash", "teeth", "biceps", "fchar_", "char_",
     ]) {
         return ModelCat::Characters;
     }
+    if has_ped_rig {
+        if has(&[
+            "hair", "beard", "brows", "eyelash", "eyebrow", "head_", "bodylower",
+            "bodyupper", "bodygenital", "bodynipple", "legacyped", "teeth", "face_", "torso_",
+        ]) {
+            return ModelCat::Characters;
+        }
+        return ModelCat::Clothing;
+    }
+
+    // 6. Air & Sea: exact aircraft & watercraft stems + cmn_boat_
+    const AIR_SEA_STEMS: &[&str] = &[
+        // Aircraft
+        "polmav", "dodo", "swift", "duster", "duster2", "mammatus", "nimbus", "maverick",
+        "shamal", "supervolito", "buzzard", "seasparrow", "mallard", "lazer", "valkyrie",
+        "volatus", "cargobob", "crake", "jet2", "216cstreamer", "streamer216", "frogger",
+        "hydra", "luxor", "velum", "vestra", "cuban800", "titan", "blimp", "besra", "miljet",
+        "havok", "akula", "annihilator", "skylift", "seabreeze", "tula", "rogue", "pyro",
+        "nokota", "molotok", "starling", "mogul", "howard", "microlight", "conada", "raiju",
+        "alkonost", "cargoplane", "ufo",
+        // Boats & watercraft (note: "toros" is an SUV -> Vehicles, "toro" is a boat)
+        "airgator", "airboat", "cruise", "cruiser", "pontoon", "dinghy", "marquis", "seashark",
+        "squalo", "speeder700gt", "speeder", "tropic", "suntrap", "longfin", "jetmax", "tug",
+        "predator", "submersible", "kraken", "avisa", "kurtz", "patrolboat", "bombora",
+        "cretacean", "seaenchantress", "seacab", "flatdeck", "sedna", "kayak", "canoe",
+        "skiff", "yacht", "toro", "coastguard", "boat",
+    ];
+    if starts(&["cmn_boat", "veh_boat", "veh_heli", "veh_plane", "sea_carrier_", "sea_yacht_"])
+        || match_known_stem(p0, AIR_SEA_STEMS)
+        || (has(&["_plane.", "_heli.", "_boat."]) && !has(&["groundplane", "emissiveplane"]))
+    {
+        return ModelCat::AircraftBoats;
+    }
+
+    // 7. Vehicles: cars, trucks, bikes, trailers, rims, & vehicle body/tuning mods (incl. car skirts)
+    const VEH_MOD_TOKENS: &[&str] = &[
+        "_histr_", "_skirt", "_bumper", "_fender", "_bonnet", "_spoiler", "_exhaust", "_grille",
+        "_rollcage", "_tb_", "_chassis", "_diffuser", "_splitter", "_canard", "_bullbar",
+        "_lightbar", "_snorkel", "_mudflap", "_sidestep", "_sunstrip", "_louvre", "_wheel_",
+        "_stwheel", "_shifter", "_curbfeeler", "_headlight", "_taillight", "_towhook",
+        "_intercooler", "_airfilter", "_turbo", "_caliper", "_windscreen", "_windshield",
+        "_hood_", "_trunk_", "_boot_", "_door_fl", "_door_fr", "_door_rl", "_door_rr",
+        "_mirror_l", "_mirror_r", "_roof_rack", "_livery", "_engine_", "_seats_", "_dash_",
+        "_bed_", "_canopy", "_wing_", "_arch_", "_winch", "_rack_",
+    ];
+    const VEH_STEMS: &[&str] = &[
+        "truck", "ambulance", "bus", "taxi", "police", "firetruck", "forklift", "tractor",
+        "excavator", "telehandler", "tanker", "freight", "van", "buggy", "burrito", "rancher",
+        "yosemite", "bison", "walton", "bobcat", "dominator", "tulip", "buffalo", "stanier",
+        "sandking", "stallion", "reclaimer", "caracara", "impaler", "gauntlet", "coquette",
+        "schafter", "sentinel", "elegy", "futo", "banshee", "comet", "cheetah", "toros",
+        "phoenix", "ruiner", "slamvan", "sanchez", "manchez", "esskey", "sovereign", "carbonrs",
+        "nightblade", "blade500", "cliffhanger", "lectro", "enduro", "zombie", "fcr", "chino",
+        "picador", "vamos", "buccaneer", "emperor", "rumpo", "granger", "woodland", "kamacho",
+        "riata", "rebel", "contender", "marshall", "drafter", "jugular", "tailgater", "blista",
+        "penumbra", "growler", "cypher", "sultan", "paragon", "sugoi", "rebla", "zion", "akane",
+        "astron", "cavalcade", "xls", "vstr", "hustler", "deviant", "packer", "phantom", "youga",
+        "boxville", "journey", "jbus", "speedo", "manana", "hermes", "minivan", "landstalker",
+        "tempesta", "patriot", "rhino", "airtug", "dump", "crawler", "parkland", "lowline",
+        "montagne", "alvinov", "sfb1000", "declasse", "double", "ganado", "sungrazer", "bogan",
+        "carbonizzare", "greta", "animus", "fr36", "mb210", "guardian", "yakuruna",
+        "transgressor", "allander", "fortune", "apc", "bike", "moto", "coupe", "sedan", "suv",
+    ];
+    if kind == "VEH"
+        || starts(&["veh_", "cmn_", "rim_", "truckbeds_", "trailer", "car_", "van_"])
+        || has(VEH_MOD_TOKENS)
+        || VEH_STEMS.iter().any(|s| p0.contains(s))
+    {
+        return ModelCat::Vehicles;
+    }
+
+    // 8. Remaining Props
     if has(&[
-        "prop_", "p_", "cvar_", "chair", "table", "bed_", "lamp", "sign_", "phone",
-        "laptop", "bottle", "cup_", "crate", "barrel", "bench", "trash", "bin_",
-        "vending", "atm_", "door_", "sofa", "couch", "tv_", "stool", "cabinet",
+        "chair", "table", "lamp", "sign_", "phone", "laptop", "bottle", "crate", "barrel",
+        "bench", "trash", "vending", "atm_", "sofa", "couch", "stool", "cabinet", "lure",
+        "inflatable",
     ]) {
         return ModelCat::Props;
     }
+
     ModelCat::World
 }
 
@@ -1237,7 +1355,15 @@ impl Rpf9App {
                 };
                 let lod_ok = !self.mv_hide_lods
                     || self.mv_cat == ModelCat::NavMesh
-                    || (!hay.contains("_slod") && !hay.contains("_lod.") && !hay.contains("_lod_") && !hay.contains("_mid."));
+                    || (!hay.contains("_slod")
+                        && !hay.contains("_lod.")
+                        && !hay.contains("_lod_")
+                        && !hay.contains("batchlod")
+                        && !hay.contains("_mid.")
+                        && !hay.contains("bipedbounds")
+                        && !hay.contains("boundprims")
+                        && !hay.contains("collision_")
+                        && !hay.contains("_bounds."));
                 cat_ok
                     && lod_ok
                     && inc.iter().all(|t| hay.contains(t))
@@ -1361,7 +1487,7 @@ impl Rpf9App {
                 });
                 ui.horizontal(|ui| {
                     let lod_btn = egui::Button::new(
-                        RichText::new(if self.mv_hide_lods { "Hide LODs: ON" } else { "Hide LODs: OFF" })
+                        RichText::new(if self.mv_hide_lods { "Hide LODs/Bounds: ON" } else { "Hide LODs/Bounds: OFF" })
                             .size(11.0)
                             .color(if self.mv_hide_lods { Color32::BLACK } else { Color32::from_rgb(185, 180, 205) }),
                     )
@@ -2724,13 +2850,28 @@ mod tests {
     #[test]
     fn model_viewer_categories_classify_correctly() {
         assert_eq!(classify_model_cat("VEH", "banshee_hi.#ft"), ModelCat::Vehicles);
+        assert_eq!(classify_model_cat("MODEL", "sentinelclassic2_skirt_split_l_histr_01.#ft"), ModelCat::Vehicles);
+        assert_eq!(classify_model_cat("MODEL", "cmn_spoiler_01.#ft"), ModelCat::Vehicles);
+        assert_eq!(classify_model_cat("MODEL", "toros_bumper_f_01.#ft"), ModelCat::Vehicles);
         assert_eq!(classify_model_cat("MODEL", "a_td_plane.#dr"), ModelCat::AircraftBoats);
+        assert_eq!(classify_model_cat("MODEL", "airgator_engine_01.#ft"), ModelCat::AircraftBoats);
+        assert_eq!(classify_model_cat("MODEL", "cmn_boat_propeller_01.#ft"), ModelCat::AircraftBoats);
+        assert_eq!(classify_model_cat("MODEL", "polmav_rotor_01.#ft"), ModelCat::AircraftBoats);
         assert_eq!(classify_model_cat("MODEL", "w_ar_carbinerifle.#dr"), ModelCat::Weapons);
+        assert_eq!(classify_model_cat("MODEL", "w_preset_rifle_assault_01.#dr"), ModelCat::Weapons);
         assert_eq!(classify_model_cat("MODEL", "crr_alligator_american_m_00.#dr"), ModelCat::Animals);
+        assert_eq!(classify_model_cat("MODEL", "crm_dog_malinoisbelgian_m_00_body_10_coa_helis.#dr"), ModelCat::Animals);
         assert_eq!(classify_model_cat("MODEL", "cs_donnie_head_mr1_cau_001_m_full.#dr"), ModelCat::Characters);
+        assert_eq!(classify_model_cat("MODEL", "beardbandholz_mr1_000_straight_l05_n_full"), ModelCat::Characters);
+        assert_eq!(classify_model_cat("MODEL", "hc_kingfishers_head_mr1_000.#dr"), ModelCat::Characters);
         assert_eq!(classify_model_cat("MODEL", "bodicecorset_fb1_002.#dr"), ModelCat::Clothing);
+        assert_eq!(classify_model_cat("MODEL", "skirtpencil_fb1_019_slim_hw_high_full.#dr"), ModelCat::Clothing);
+        assert_eq!(classify_model_cat("MODEL", "gmt_skirt_mini_f_hang_01a.#dr"), ModelCat::Clothing);
+        assert_eq!(classify_model_cat("MODEL", "shoesboat_fr1_000_low_fh_full.#dr"), ModelCat::Clothing);
         assert_eq!(classify_model_cat("MODEL", "prop_am_table_dining_13b.#dr"), ModelCat::Props);
+        assert_eq!(classify_model_cat("MODEL", "prop_am_boatlift_02.#dr"), ModelCat::Props);
         assert_eq!(classify_model_cat("MODEL", "a_bfyb01_sea_tr_02_bridge_01.#dr"), ModelCat::World);
+        assert_eq!(classify_model_cat("MODEL", "int_grg_14_painted_wall_skirting.#dr"), ModelCat::World);
         assert_eq!(classify_model_cat("NAVM", "nav_160_179.ynv"), ModelCat::NavMesh);
     }
 
