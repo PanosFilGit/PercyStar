@@ -1,0 +1,34 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: #120C1C; overflow: hidden; }
+    /* window at native 1080x655, scaled by the camera (transform-origin 0 0) */
+    #hook-cam { position: absolute; left: 0; top: 0; width: 1080px; height: 655px; transform-origin: 0 0; }
+    #hook-shot { position: absolute; left: 0; top: 0; width: 1080px; height: 655px; }
+    /* real viewport recording sits exactly over preview.png's viewport */
+    #hook-vp { position: absolute; left: 418px; top: 107px; width: 651px; height: 514px; background: #0D0B13; }
+    #hook-vp img, #hook-car { position: absolute; inset: 0; width: 100%; height: 100%; }
+  </style>
+  <div id="root" data-composition-id="hook" data-width="1920" data-height="1080">
+    <div id="hook-cam" data-layout-allow-overflow>
+      <img id="hook-shot" src="assets/preview.png" alt="" />
+      <div id="hook-vp">
+        <img src="assets/car_tex_last.png" alt="" />
+        <video id="hook-car" class="clip" src="assets/car_tex.mp4" data-start="0" data-duration="1.68" data-track-index="1" muted playsinline></video>
+      </div>
+    </div>
+  </div>
+  <script>
+    // camera: centre native point (cx, cy) on screen at scale s
+    const cam = (s, cx, cy) => ({ scale: s, x: 960 - cx * s, y: 540 - cy * s });
+    const tl = gsap.timeline({ paused: true });
+    // open: viewport fills the frame height, car already spinning
+    tl.fromTo("#hook-cam", cam(2.1, 743, 364), { ...cam(2.1, 743, 364), duration: 1.6, ease: "none" }, 0);
+    // pull back to the whole real window: the car is one row in an archive
+    tl.to("#hook-cam", { ...cam(1.65, 540, 327), duration: 0.8, ease: "power2.inOut" }, 1.6);
+    // track to the Hex / Info tab, then zoom through it (its dark fill becomes the bytes world)
+    tl.to("#hook-cam", { ...cam(2.6, 443, 57), duration: 0.5, ease: "power2.inOut" }, 2.6);
+    tl.to("#hook-cam", { ...cam(40, 443, 57), duration: 0.45, ease: "power3.in" }, 3.12);
+    tl.fromTo("#hook-cam", { filter: "blur(0px)" }, { filter: "blur(10px)", duration: 0.3, ease: "power3.in" }, 3.27);
+    window.__timelines["hook"] = tl;
+  </script>
+</template>

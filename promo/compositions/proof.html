@@ -1,0 +1,179 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: #120C1C; overflow: hidden; font-family: Inter, sans-serif; }
+    #p-cam { position: absolute; left: 0; top: 0; width: 1080px; height: 655px; transform-origin: 0 0; background: #120C1C; color: #D8D0E4; font-size: 11px; }
+    #p-cam div { position: absolute; white-space: nowrap; }
+    .p-btn { height: 17px; line-height: 15px; padding: 0 5px; background: #221632; border: 1px solid #442A62; border-radius: 3px; font-size: 11px; color: #D8D0E4; }
+    #p-top { left: 0; top: 0; width: 1080px; height: 38px; border-bottom: 1px solid #2A1C3E; }
+    #p-logo { position: absolute; left: 9px; top: 8px; width: 22px; height: 22px; }
+    #p-name { left: 42px; top: 11px; font-size: 14px; font-weight: 700; letter-spacing: 0.02em; color: #FFA81C; }
+    #p-rpf { left: 123px; top: 13px; font-size: 11px; color: #FF48A5; font-weight: 700; }
+    #p-search { left: 724px; top: 10px; width: 211px; height: 19px; background: #0C0814; border: 1px solid #442A62; border-radius: 4px; padding: 0 6px; line-height: 17px; }
+    #p-ph { left: 6px; top: 0; color: #5D5070; }
+    #p-q { left: 6px; top: 0; color: #F4EEF8; }
+    #p-q span { opacity: 0; }
+    #p-side { left: 0; top: 39px; width: 127px; height: 593px; border-right: 1px solid #2A1C3E; }
+    #p-at { left: 7px; top: 7px; font-size: 9px; color: #8A7FA0; letter-spacing: 0.04em; }
+    .p-cat { left: 4px; padding: 0 3px; border-radius: 3px; height: 15px; line-height: 15px; }
+    #p-sel { left: 4px; top: 63px; width: 82px; height: 15px; background: #FF48A5; border-radius: 3px; }
+    #p-list { left: 128px; top: 39px; width: 282px; height: 593px; border-right: 1px solid #2A1C3E; }
+    #p-res { left: 7px; top: 26px; font-size: 9px; color: #8A7FA0; }
+    .p-row { left: 4px; height: 16px; line-height: 16px; padding: 0 3px; border-radius: 3px; }
+    #p-res span { position: absolute; left: 0; top: 0; }
+    .p-cat .p-c { display: none; }
+    .p-row b { display: inline-block; width: 26px; font-weight: 700; }
+    .p-row .p-rt { padding: 0 3px; border-radius: 3px; }
+    #p-panel { left: 410px; top: 39px; width: 670px; height: 593px; }
+    #p-tabs { left: 10px; top: 9px; }
+    #p-tabs .p-tab { position: relative; display: inline-block; padding: 1px 5px; border-radius: 3px; margin-right: 4px; }
+    #p-tabs .p-on { background: #FF48A5; color: #fff; }
+    #p-rule { left: 10px; top: 30px; width: 650px; height: 1px; background: #2A1C3E; }
+    #p-info { left: 10px; top: 37px; color: #FFA81C; }
+    #p-modes { left: 330px; top: 35px; display: flex; gap: 5px; }
+    #p-modes .p-btn { position: relative; }
+    #p-spin { background: #FF48A5; color: #fff; border-color: #FF48A5; }
+    #p-row2 { left: 10px; top: 54px; width: 650px; height: 18px; }
+    #p-emb { left: 190px; top: 2px; font-size: 9px; color: #82919F; }
+    #p-vp { left: 8px; top: 68px; width: 651px; height: 514px; background: #0D0B13; border-radius: 3px; overflow: hidden; }
+    #p-vp img, #p-vp video { position: absolute; left: 0; top: 0; width: 651px; height: 514px; }
+    #p-status { left: 0; top: 632px; width: 1080px; height: 23px; border-top: 1px solid #2A1C3E; font-size: 10px; color: #D8D0E4; }
+    #p-s1, #p-s2 { left: 9px; top: 5px; }
+    #p-f1, #p-f2 { right: 9px; top: 5px; color: #8A7FA0; }
+    .p-row, #p-panel > *:not(#p-vp), #p-s2, #p-f2, #p-chip, .p-res5, .p-res1, #p-vp img { opacity: 0; }
+    #p-cur { left: 0; top: 0; width: 17px; height: 24px; color: #F4EEF8; }
+    #p-chip { left: 0; top: 0; padding: 4px 9px 4px 7px; background: #FFA81C; color: #120C1C; border-radius: 4px; font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 5px; }
+  </style>
+  <div id="root" data-composition-id="proof" data-width="1920" data-height="1080">
+    <div id="p-cam" data-layout-allow-overflow data-layout-allow-overlap>
+      <div id="p-top">
+        <img id="p-logo" src="assets/logo.png" alt="" />
+        <div id="p-name">PERCYSTAR</div><div id="p-rpf">RPF9</div>
+        <div class="p-btn" id="p-open" style="left:163px;top:10px">Open Folder...</div>
+        <div class="p-btn" style="left:248px;top:10px">Open .RPF</div>
+        <div class="p-btn" style="left:315px;top:10px">Open .OBJ</div>
+        <div class="p-btn" style="left:383px;top:10px">Rescan</div>
+        <div id="p-search"><div id="p-ph">Search (Ctrl+F) · words AND · -exclude</div><div id="p-q"><span>s</span><span>u</span><span>n</span><span>s</span><span>e</span><span>t</span></div></div>
+        <div class="p-btn" style="left:942px;top:10px">Export Selected</div>
+        <div class="p-btn" style="left:1030px;top:10px">Export All</div>
+      </div>
+      <div id="p-side">
+        <div id="p-at">ARCHIVE TREE</div>
+        <div id="p-sel" style="top:24px"></div>
+        <div class="p-cat" style="top:24.0px">All Files (<span class="p-z">0</span><span class="p-c">5</span>)</div>
+        <div class="p-cat" style="top:41.5px">Vehicles (.#ft) (<span class="p-z">0</span><span class="p-c">1</span>)</div>
+        <div class="p-cat" style="top:59.0px">3D Models (.#dr/.#ft) (<span class="p-z">0</span><span class="p-c">2</span>)</div>
+        <div class="p-cat" style="top:76.5px">Videos (.bk2) (<span class="p-z">0</span><span class="p-c">0</span>)</div>
+        <div class="p-cat" style="top:94.0px">Audio (.awc) (<span class="p-z">0</span><span class="p-c">0</span>)</div>
+        <div class="p-cat" style="top:111.5px">Configs (.xml) (<span class="p-z">0</span><span class="p-c">1</span>)</div>
+        <div class="p-cat" style="top:129.0px">Resources (.psin) (<span class="p-z">0</span><span class="p-c">0</span>)</div>
+        <div class="p-cat" style="top:146.5px">Binary (.bin) (<span class="p-z">0</span><span class="p-c">2</span>)</div>
+      </div>
+      <div id="p-list">
+        <div id="p-res"><span class="p-res0">0 results</span><span class="p-res5">5 results</span><span class="p-res1">1 results</span></div>
+        <div class="p-row" id="p-row0" style="top:79px"><b style="color:#FF55AF">VEH</b><span class="p-rt">percystar_showcase.rpf / sunset_coupe.#ft  (32.0 KB)</span></div>
+<div class="p-row" id="p-row1" style="top:97px"><b style="color:#82AFFF">MODEL</b><span class="p-rt">percystar_showcase.rpf / percystar_torus.#dr  (8.0 KB)</span></div>
+<div class="p-row" id="p-row2" style="top:115px"><b style="color:#48D2FF">XML</b><span class="p-rt">percystar_showcase.rpf / 0001_PercyStarPalette.xml  (198 B)</span></div>
+<div class="p-row" id="p-row3" style="top:133px"><b style="color:#9198A8">ZLIB</b><span class="p-rt">percystar_showcase.rpf / 0002_data.bin  (32.0 KB)</span></div>
+<div class="p-row" id="p-row4" style="top:151px"><b style="color:#9198A8">ZLIB</b><span class="p-rt">percystar_showcase.rpf / 0003_data.bin  (8.0 KB)</span></div>
+      </div>
+      <div id="p-panel">
+        <div id="p-tabs"><span class="p-tab">Hex / Info</span><span class="p-tab p-on">3D Model View</span></div>
+        <div id="p-rule"></div>
+        <div id="p-info">sunset_coupe.#ft · 168 verts · 296 tris · 1 geoms / 2 meshlets (LOD0)</div>
+        <div id="p-modes"><span class="p-btn p-mode" id="p-mode0">Textured/Mat</span>
+<span class="p-btn p-mode" id="p-mode1">Clay Solid</span>
+<span class="p-btn p-mode" id="p-mode2">Solid+Wire</span>
+<span class="p-btn p-mode" id="p-mode3">Wire</span>
+        <span class="p-btn" id="p-spin">Spin</span></div>
+        <div id="p-row2">
+          <div class="p-btn" style="left:0;top:0">Load Texture...</div>
+          <div class="p-btn" style="left:79px;top:0">Reset</div>
+          <div class="p-btn" id="p-exp" style="left:117px;top:0">Export .OBJ</div>
+          <div id="p-emb">Embedded 64x64 (fmt 71)</div>
+        </div>
+        <div id="p-vp">
+          <img id="p-still" src="assets/car_tex_last.png" alt="" />
+          <video id="p-v1" class="clip" src="assets/car_tex.mp4" data-start="4.5" data-duration="1.68" data-track-index="1" muted playsinline></video>
+          <video id="p-v2" class="clip" src="assets/car_clay.mp4" data-start="6.15" data-duration="1.04" data-track-index="2" muted playsinline></video>
+          <video id="p-v3" class="clip" src="assets/car_wire.mp4" data-start="7.25" data-duration="0.88" data-track-index="3" muted playsinline></video>
+          <video id="p-v4" class="clip" src="assets/car_tex.mp4" data-start="8.25" data-duration="1.68" data-track-index="4" muted playsinline></video>
+        </div>
+      </div>
+      <div id="p-status">
+        <div id="p-s1">Open an .rpf or select a game folder</div><div id="p-s2">1 RPFs · 5 entries (instant cache)</div>
+        <div id="p-f1">No archive or folder loaded.</div><div id="p-f2">Folder: percystar_demo_folder</div>
+      </div>
+      <div id="p-chip"><svg width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1h6l4 4v8H1z"/><path d="M7 1v4h4"/></svg>sunset_coupe.ft.obj</div>
+      <svg id="p-cur" viewBox="0 0 17 24" fill="#120C1C" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M1.5 1.5v18.5l4.6-4.4 3.2 7 3-1.4-3.2-6.8h6.4z"/></svg>
+    </div>
+  </div>
+  <script>
+    const cam = (s, cx, cy) => ({ scale: s, x: 960 - cx * s, y: 540 - cy * s });
+    const cur = (x, y) => ({ x: x, y: y });
+    const tl = gsap.timeline({ paused: true });
+    // explicit from-state on every move so any seek renders the same frame
+    let camS = cam(1.75, 540, 327), curS = cur(760, 520);
+    const camTo = (n, t, d, e) => { tl.fromTo("#p-cam", { ...camS }, { ...n, duration: d, ease: e, immediateRender: false }, t); camS = n; };
+    const curTo = (n, t, d, e) => { tl.fromTo("#p-cur", { ...curS }, { ...n, duration: d, ease: e, immediateRender: false }, t); curS = n; };
+    // initial state: empty archive window
+    gsap.set("#p-cam", cam(1.75, 540, 327));
+    gsap.set("#p-cur", cur(760, 520));
+    gsap.set("#p-chip", cur(563, 99));
+    // arrive from the whip: window lands blurred and sharpens
+    tl.fromTo("#p-cam", { filter: "blur(16px)" }, { filter: "blur(0px)", duration: 0.25, ease: "power2.out" }, 0);
+    // 1. Open Folder
+    camTo(cam(2.6, 300, 150), 0.45, 0.5, "power2.inOut");
+    curTo(cur(196, 20), 0.2, 0.75, "expo.out");
+    tl.to("#p-open", { scale: 0.92, duration: 0.06, yoyo: true, repeat: 1 }, 1.0);
+    // rows pour in, counts and status update
+    tl.to(".p-row", { opacity: 1, duration: 0.18, stagger: 0.08, ease: "power2.out" }, 1.2);
+    tl.fromTo(".p-row", { x: -12 }, { x: 0, duration: 0.4, stagger: 0.08, ease: "expo.out" }, 1.2);
+    tl.set(".p-cat .p-z", { display: "none" }, 1.25);
+    tl.set(".p-cat .p-c", { display: "inline" }, 1.25);
+    tl.set(".p-res0", { opacity: 0 }, 1.25);
+    tl.set(".p-res5", { opacity: 1 }, 1.25);
+    tl.to("#p-s1, #p-f1", { opacity: 0, duration: 0.1 }, 1.25);
+    tl.to("#p-s2, #p-f2", { opacity: 1, duration: 0.15 }, 1.3);
+    // 2. search "sunset"
+    camTo(cam(3.0, 830, 70), 2.0, 0.5, "power2.inOut");
+    curTo(cur(752, 24), 2.0, 0.55, "expo.out");
+    tl.to("#p-ph", { opacity: 0, duration: 0.05 }, 2.62);
+    tl.to("#p-q span", { opacity: 1, duration: 0.01, stagger: 0.1 }, 2.7);
+    // filter: only the coupe stays
+    tl.to("#p-row1, #p-row2, #p-row3, #p-row4", { opacity: 0, duration: 0.18, stagger: 0.03 }, 3.4);
+    tl.set(".p-res5", { opacity: 0 }, 3.42);
+    tl.set(".p-res1", { opacity: 1 }, 3.42);
+    // 3. click the row
+    camTo(cam(3.0, 270, 110), 3.5, 0.5, "power2.inOut");
+    curTo(cur(300, 126), 3.45, 0.6, "expo.out");
+    tl.to("#p-row0 .p-rt", { backgroundColor: "#FF48A5", color: "#FFFFFF", duration: 0.08 }, 4.1);
+    // the viewer opens on the real coupe
+    camTo(cam(1.9, 745, 330), 4.2, 0.6, "power2.inOut");
+    tl.to("#p-panel > *", { opacity: 1, duration: 0.15, stagger: 0.03 }, 4.25);
+    tl.to("#p-vp img", { opacity: 1, duration: 0.01 }, 6.1);
+    const modeOn = (i, t) => {
+      tl.to(".p-mode", { backgroundColor: "#221632", color: "#D8D0E4", borderColor: "#442A62", duration: 0.06 }, t);
+      tl.to("#p-mode" + i, { backgroundColor: "#FF48A5", color: "#FFFFFF", borderColor: "#FF48A5", duration: 0.06 }, t);
+    };
+    modeOn(0, 4.25);
+    // 4. Clay Solid, Wire, Textured/Mat
+    curTo(cur(852, 86), 5.4, 0.6, "expo.out");
+    modeOn(1, 6.1);
+    curTo(cur(974, 86), 6.6, 0.6, "expo.out");
+    modeOn(3, 7.2);
+    curTo(cur(780, 86), 7.6, 0.6, "expo.out");
+    modeOn(0, 8.2);
+    // 5. Export .OBJ
+    camTo(cam(3.2, 600, 115), 9.3, 0.5, "power2.inOut");
+    curTo(cur(568, 104), 9.4, 0.6, "expo.out");
+    tl.to("#p-exp", { scale: 0.92, duration: 0.06, yoyo: true, repeat: 1 }, 10.2);
+    // the file leaves the button
+    tl.to("#p-chip", { opacity: 1, duration: 0.1 }, 10.3);
+    tl.fromTo("#p-chip", { scale: 0.4, x: 548, y: 108 }, { scale: 1, x: 585, y: 128, duration: 0.6, ease: "expo.out" }, 10.3);
+    curTo(cur(700, 260), 10.5, 0.6, "power2.in");
+    // carry: push into the chip until it fills the frame
+    camTo(cam(9, 640, 138), 11.25, 0.75, "power3.in");
+    tl.to("#p-cam", { filter: "blur(10px)", duration: 0.3, ease: "power3.in" }, 11.7);
+    window.__timelines["proof"] = tl;
+  </script>
+</template>

@@ -1,0 +1,30 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: #0C0C13; overflow: hidden; font-family: Inter, sans-serif; }
+    #pay-stage { position: absolute; left: 330px; top: 0; width: 1366px; height: 1080px; }
+    #pay-stage img, #pay-car { position: absolute; left: 0; top: 0; width: 1366px; height: 1080px; }
+    #pay-chip { position: absolute; left: 150px; top: 760px; padding: 18px 34px 18px 26px; background: #FFA81C; color: #120C1C; border-radius: 14px; font-size: 64px; font-weight: 900; letter-spacing: -0.02em; display: flex; align-items: center; gap: 22px; transform-origin: 0 50%; }
+    #pay-meta { position: absolute; left: 156px; top: 900px; font-size: 40px; font-weight: 700; color: #F4EEF8; }
+    #pay-meta span { display: inline-block; margin-right: 0.3em; }
+    #pay-meta .acc { color: #FF48A5; }
+  </style>
+  <div id="root" data-composition-id="payoff" data-width="1920" data-height="1080">
+    <div id="pay-stage">
+      <img src="assets/car_tex_last.png" alt="" />
+      <video id="pay-car" class="clip" src="assets/car_tex.mp4" data-start="0" data-duration="2.2" data-playback-rate="0.765" data-track-index="1" muted playsinline></video>
+    </div>
+    <div id="pay-chip" data-layout-allow-overlap><svg width="46" height="54" viewBox="0 0 12 14" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M1 1h6l4 4v8H1z"/><path d="M7 1v4h4"/></svg>sunset_coupe.ft.obj</div>
+    <div id="pay-meta"><span class="acc">168</span><span>verts ·</span><span class="acc">296</span><span>tris · LOD0</span></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // the car opens through an iris from the chip, already spinning
+    tl.fromTo("#pay-stage", { clipPath: "circle(0px at 0px 900px)" }, { clipPath: "circle(1700px at 0px 900px)", duration: 0.7, ease: "power2.inOut" }, 0.05);
+    // the chip carried in from the export, landing at full size
+    tl.fromTo("#pay-chip", { scale: 2.2, x: 360, y: -380, filter: "blur(10px)" }, { scale: 1, x: 0, y: 0, filter: "blur(0px)", duration: 0.6, ease: "expo.out" }, 0);
+    tl.fromTo("#pay-meta span", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.14, stagger: 0.08, ease: "power2.out" }, 0.9);
+    // leave: everything blurs out as the orange floods in next
+    tl.to("#pay-chip, #pay-meta", { opacity: 0, filter: "blur(8px)", duration: 0.2, ease: "power2.in" }, 4.15);
+    window.__timelines["payoff"] = tl;
+  </script>
+</template>

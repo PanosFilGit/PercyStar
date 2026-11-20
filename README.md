@@ -28,6 +28,15 @@
 
 ---
 
+## Promo
+
+<p align="center">
+  <a href="assets/promo.mp4"><img src="assets/promo-poster.jpg" alt="PercyStar promo video: pulling a car out of an RPF9 archive into an .OBJ" width="860" /></a><br />
+  <sub><a href="assets/promo.mp4">Watch the 31-second promo (MP4)</a></sub>
+</p>
+
+---
+
 ## Visual Showcase
 
 ### RAGE 9 3D Meshlet Viewer (`Textured/Mat` · `Clay Solid` · `Solid+Wire` · `Wire`)
@@ -81,7 +90,10 @@ PercyStar/
 │   ├── demo_overview.webp  # 30fps Neon Sunset UI, search & updater showcase
 │   ├── demo_3d.webp        # 30fps 3D meshlet viewer shading modes showcase
 │   ├── demo_inspector.webp # 30fps XML / PSIN / ADAT Opus audio showcase
-│   └── preview.png         # High-res Neon Sunset screenshot
+│   ├── preview.png         # High-res Neon Sunset screenshot
+│   ├── promo.mp4           # 31s promo video
+│   └── promo-poster.jpg    # Promo poster frame
+├── promo/                  # HyperFrames source for the promo video
 ├── scripts/
 │   ├── build_macos.sh      # Universal macOS (.app / .zip) build helper
 │   ├── setup_deps.ps1      # Optional RAD Video Tools (binkplay.exe) setup

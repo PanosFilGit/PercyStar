@@ -1,0 +1,37 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: #120C1C; overflow: hidden; font-family: Inter, sans-serif; }
+    #e-flood { position: absolute; inset: 0; background: #FFA81C; }
+    #e-claim { position: absolute; left: 0; right: 0; top: 330px; text-align: center; font-size: 130px; font-weight: 900; letter-spacing: -0.03em; line-height: 1.12; color: #120C1C; }
+    #e-claim span { display: inline-block; margin: 0 0.12em; }
+    #e-claim .acc { color: #FFFFFF; }
+    #e-lock { position: absolute; left: 0; right: 0; top: 300px; display: flex; align-items: center; justify-content: center; gap: 40px; }
+    #e-logo { width: 170px; height: 170px; }
+    #e-word { font-size: 140px; font-weight: 900; letter-spacing: -0.03em; color: #120C1C; }
+    #e-cta { position: absolute; left: 0; right: 0; top: 560px; text-align: center; font-size: 52px; font-weight: 700; color: #120C1C; }
+    #e-url { position: absolute; left: 0; right: 0; top: 650px; text-align: center; font-family: "JetBrains Mono", monospace; font-size: 40px; color: #3A1E4A; }
+  </style>
+  <div id="root" data-composition-id="endcard" data-width="1920" data-height="1080">
+    <div id="e-flood"></div>
+    <div id="e-claim"><span>Open</span><span>the</span><span>archive.</span><br /><span>Keep</span><span>the</span><span class="acc">model.</span></div>
+    <div id="e-lock"><img id="e-logo" src="assets/logo.png" alt="PercyStar logo" /><div id="e-word">PercyStar</div></div>
+    <div id="e-cta">Download for Windows and macOS</div>
+    <div id="e-url">github.com/rpatty-dev/PercyStar</div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // colour flood from the payoff
+    tl.fromTo("#e-flood", { clipPath: "circle(0% at 30% 82%)" }, { clipPath: "circle(150% at 30% 82%)", duration: 0.45, ease: "power2.inOut" }, 0);
+    // the claim, word by word, then dead still
+    tl.fromTo("#e-claim span", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.14, stagger: 0.09, ease: "power2.out" }, 0.4);
+    tl.to("#e-claim span", { opacity: 0, filter: "blur(8px)", duration: 0.18, stagger: 0.03, ease: "power2.in" }, 2.55);
+    // the mark drops in and lands with weight (bass impact at 3.1)
+    tl.fromTo("#e-logo", { y: -700, rotation: -18, opacity: 1 }, { y: 0, rotation: 0, duration: 0.42, ease: "power3.in" }, 2.68);
+    tl.fromTo("#e-logo", { scale: 1 }, { keyframes: [{ scaleY: 0.86, scaleX: 1.1, duration: 0.07 }, { scaleY: 1, scaleX: 1, duration: 0.28, ease: "elastic.out(1, 0.55)" }] }, 3.1);
+    // wordmark wipes in beside it
+    tl.fromTo("#e-word", { clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0% 0 0)", duration: 0.45, ease: "expo.out" }, 3.2);
+    tl.fromTo("#e-cta", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.18, ease: "power2.out" }, 3.6);
+    tl.fromTo("#e-url", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.18, ease: "power2.out" }, 3.75);
+    window.__timelines["endcard"] = tl;
+  </script>
+</template>

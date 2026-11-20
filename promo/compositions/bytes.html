@@ -1,0 +1,95 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: #120C1C; overflow: hidden; }
+    #b-hex { position: absolute; left: 150px; top: 0; font-family: "JetBrains Mono", monospace; font-size: 34px; line-height: 52px; color: #6A5590; }
+    #b-hex .r { white-space: pre; }
+    #b-hex i { font-style: normal; color: #47386A; margin-right: 34px; }
+    #b-hex .r i:last-child { margin-left: 34px; margin-right: 0; }
+    #b-hex .m { color: #FFA81C; }
+    #b-line { position: absolute; left: 150px; bottom: 150px; font-family: Inter, sans-serif; font-weight: 900; font-size: 104px; letter-spacing: -0.02em; color: #F4EEF8; white-space: nowrap; }
+    #b-line span { display: inline-block; margin-right: 0.24em; }
+    #b-line .acc { color: #FFA81C; }
+    #b-title { position: absolute; left: 0; right: 0; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-family: Inter, sans-serif; font-weight: 900; font-size: 230px; letter-spacing: -0.03em; color: #FFA81C; }
+    #b-title .b-l { display: inline-block; }
+  </style>
+  <div id="root" data-composition-id="bytes" data-width="1920" data-height="1080">
+    <div id="b-hex" data-layout-allow-overflow data-layout-ignore>
+        <div class="r"><i>00000000</i><span class="m">39</span> <span class="m">46</span> <span class="m">50</span> <span class="m">52</span> b0 02 00 00 80 02 00 00 e0 00 00 00  <i><span class="m">9FPR</span>............</i></div>
+        <div class="r"><i>00000010</i>25 2c 2c 56 af 7d a0 b6 00 7a 04 00 50 01 00 00  <i>%,,V.}...z..P...</i></div>
+        <div class="r"><i>00000020</i>03 00 01 00 04 00 00 00 54 27 a9 c0 01 0f 09 00  <i>........T'......</i></div>
+        <div class="r"><i>00000030</i>10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000040</i>5f 08 da ab ec bd d4 02 58 c3 51 68 07 02 4c 24  <i>_.......X.Qh..L$</i></div>
+        <div class="r"><i>00000050</i>fb 9f 75 67 55 ef 4b e4 58 78 5b fe d8 aa 69 89  <i>..ugU.K.Xx[...i.</i></div>
+        <div class="r"><i>00000060</i>1a 76 a3 42 70 64 7c 37 e7 93 36 ef 18 47 af ea  <i>.v.Bpd|7..6..G..</i></div>
+        <div class="r"><i>00000070</i>25 e4 9c c5 08 03 ad ef 8d d7 b0 40 63 22 15 cc  <i>%..........@c"..</i></div>
+        <div class="r"><i>00000080</i>79 33 8d d8 ba 21 6f c2 c6 c8 2d cd cd 86 6a 2c  <i>y3...!o...-...j,</i></div>
+        <div class="r"><i>00000090</i>e5 2e 7a d8 16 bb b7 89 e2 cb 35 32 45 c2 b3 03  <i>..z.......52E...</i></div>
+        <div class="r"><i>000000a0</i>8c ec 65 dc c3 2a 1f 87 ae 06 a5 62 b9 19 71 1c  <i>..e..*.....b..q.</i></div>
+        <div class="r"><i>000000b0</i>24 9b 03 8a aa f6 21 4b b4 19 45 50 ad f2 e2 b0  <i>$.....!K..EP....</i></div>
+        <div class="r"><i>000000c0</i>4d 16 6f cd 97 b4 88 ea 88 07 f8 90 52 ae a4 00  <i>M.o.........R...</i></div>
+        <div class="r"><i>000000d0</i>79 c9 36 c3 b2 54 91 7f b6 89 64 72 68 77 42 da  <i>y.6..T....drhwB.</i></div>
+        <div class="r"><i>000000e0</i>9f 6c 45 08 1b 14 99 e0 d8 50 1b 56 13 a2 35 1a  <i>.lE......P.V..5.</i></div>
+        <div class="r"><i>000000f0</i>34 d2 d8 0d da 9e 89 1d d3 10 d9 7a 66 71 17 b9  <i>4..........zfq..</i></div>
+        <div class="r"><i>00000100</i>e9 1a 69 5e fa be 53 00 74 03 27 4a 2e 1f dc c5  <i>..i^..S.t.'J....</i></div>
+        <div class="r"><i>00000110</i>0d e5 7c 47 b2 66 86 f3 8f 45 1b 86 a0 97 ec 9b  <i>..|G.f...E......</i></div>
+        <div class="r"><i>00000120</i>08 05 c5 65 b2 1e e4 6a 99 14 a8 77 d9 7f fe bc  <i>...e...j...w....</i></div>
+        <div class="r"><i>00000130</i>4f 70 84 56 12 5c 21 1b f6 14 42 9c 25 53 96 80  <i>Op.V.\!...B.%S..</i></div>
+        <div class="r"><i>00000140</i>3d b4 fa 17 21 fc 2b 89 ac ab 4f 45 5f 8a 8d 25  <i>=...!.+...OE_..%</i></div>
+        <div class="r"><i>00000150</i>37 32 79 f0 ba a1 67 36 fa a2 ff a0 7c e8 8d 33  <i>72y...g6....|..3</i></div>
+        <div class="r"><i>00000160</i>3d eb c5 49 18 a8 a5 0d 46 fc 01 02 21 b2 29 22  <i>=..I....F...!.)"</i></div>
+        <div class="r"><i>00000170</i>ae f4 86 50 10 0a 23 8a 44 02 27 a3 c7 70 c0 80  <i>...P..#.D.'..p..</i></div>
+        <div class="r"><i>00000180</i>c2 2e 11 0d ec 97 a3 7e 91 8f 0c 24 64 2d 70 94  <i>.......~...$d-p.</i></div>
+        <div class="r"><i>00000190</i>91 eb 2a 9c 29 87 89 df c2 d5 a1 84 72 3e 13 83  <i>..*.).......r&gt;..</i></div>
+        <div class="r"><i>000001a0</i>5c 6e 06 20 0f b2 6a 5e a4 e2 1a 26 05 25 66 d2  <i>\n. ..j^...&amp;.%f.</i></div>
+        <div class="r"><i>000001b0</i>94 b8 52 ea 32 13 1e c0 17 a1 c8 3c c6 88 c2 8a  <i>..R.2......&lt;....</i></div>
+        <div class="r"><i>000001c0</i>90 db b9 88 41 7f fa ff 7a d3 41 7c 7a 60 b9 44  <i>....A...z.A|z`.D</i></div>
+        <div class="r"><i>000001d0</i>47 a3 6b e9 1c fb 1f 15 92 d4 1d a9 07 39 6a bc  <i>G.k..........9j.</i></div>
+        <div class="r"><i>000001e0</i>78 48 61 53 c6 e9 79 af 9b ab f7 e4 4f 3e 25 1a  <i>xHaS..y.....O&gt;%.</i></div>
+        <div class="r"><i>000001f0</i>30 81 db 0e 07 10 1e 1b 02 48 10 15 18 08 6a 90  <i>0........H....j.</i></div>
+        <div class="r"><i>00000200</i>c0 a9 4b 89 50 0a 7c 43 9e ee 37 32 9f ac 4d f6  <i>..K.P.|C..72..M.</i></div>
+        <div class="r"><i>00000210</i>27 8c 4d 17 d3 57 7d 97 86 68 83 43 02 77 ec 19  <i>'.M..W}..h.C.w..</i></div>
+        <div class="r"><i>00000220</i>b1 be fd 34 8c 86 e7 4f 6a 77 61 b0 6c e0 bb bd  <i>...4...Ojwa.l...</i></div>
+        <div class="r"><i>00000230</i>df 93 9e c2 f0 c1 e6 51 83 b4 4b b1 74 8d bb 34  <i>.......Q..K.t..4</i></div>
+        <div class="r"><i>00000240</i>eb ad 5e 5c a9 88 b4 d3 4a 2c f7 13 c9 a0 ba 8d  <i>..^\....J,......</i></div>
+        <div class="r"><i>00000250</i>99 85 5e 55 ac ee 25 30 72 9a 9f 34 a4 fb c0 eb  <i>..^U..%0r..4....</i></div>
+        <div class="r"><i>00000260</i>fc 1f 40 05 65 45 6d 87 b2 98 8b 57 f1 40 aa 25  <i>..@.eEm....W.@.%</i></div>
+        <div class="r"><i>00000270</i>84 5b 9a b7 98 4a f2 a1 0c 5c ad 80 17 5e 3e 85  <i>.[...J...\...^&gt;.</i></div>
+        <div class="r"><i>00000280</i>1d 66 ed c6 3b d3 51 41 26 1c 37 25 ad 8d 7a f5  <i>.f..;.QA&amp;.7%..z.</i></div>
+        <div class="r"><i>00000290</i>14 6c 58 36 30 c5 24 f3 6b c4 68 cd f2 b2 0d 3e  <i>.lX60.$.k.h....&gt;</i></div>
+        <div class="r"><i>000002a0</i>2a d5 2e f0 51 11 83 11 a7 db 2c 93 9d 0d 91 03  <i>*...Q.....,.....</i></div>
+        <div class="r"><i>000002b0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>000002c0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>000002d0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>000002e0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>000002f0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000300</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000310</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000320</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000330</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000340</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000350</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000360</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000370</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000380</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>00000390</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>000003a0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+        <div class="r"><i>000003b0</i>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  <i>................</i></div>
+    </div>
+    <div id="b-line" data-layout-allow-overlap><span>Inside,</span><span>it's</span><span>just</span><span class="acc">bytes</span></div>
+    <div id="b-title"><div id="b-word"><span class="b-l">P</span><span class="b-l">e</span><span class="b-l">r</span><span class="b-l">c</span><span class="b-l">y</span><span class="b-l">S</span><span class="b-l">t</span><span class="b-l">a</span><span class="b-l">r</span></div></div>
+  </div>
+  <script>
+    const tl = gsap.timeline({ paused: true });
+    // the archive as the old way: real 9FPR header bytes scrolling, no meaning
+    tl.fromTo("#b-hex", { y: 40 }, { y: -1700, duration: 3.2, ease: "none" }, 0);
+    tl.fromTo("#b-line span", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.14, stagger: 0.08, ease: "power2.out" }, 0.6);
+    // collapse: bytes fold away, the line blurs out
+    tl.to("#b-line span", { opacity: 0, filter: "blur(8px)", duration: 0.2, stagger: 0.04, ease: "power2.in" }, 2.7);
+    tl.to("#b-hex", { scaleY: 0.02, opacity: 0, filter: "blur(14px)", duration: 0.45, ease: "power3.in", transformOrigin: "50% 1000px" }, 2.8);
+    // the name lands, letter by letter, then holds dead still
+    tl.fromTo("#b-title .b-l", { opacity: 0.0, filter: "blur(10px)", y: 30 }, { opacity: 1, filter: "blur(0px)", y: 0, duration: 0.5, stagger: 0.07, ease: "expo.out" }, 3.1);
+    // whip left into the app window
+    tl.to("#b-word", { x: -2200, filter: "blur(20px)", duration: 0.3, ease: "power3.in" }, 5.1);
+    window.__timelines["bytes"] = tl;
+  </script>
+</template>
