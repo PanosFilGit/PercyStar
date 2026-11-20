@@ -1,7 +1,7 @@
 {
   "title": "RAGE 9 Research & PercyStar Breakthroughs",
   "author": "@rpatty",
-  "lastUpdated": "2026-11-20 14:40 UTC",
+  "lastUpdated": "2026-11-20 15:05 UTC",
   "percystarVersion": "1.3.0",
   "links": {
     "github": "https://github.com/rpatty-dev/PercyStar",
@@ -141,6 +141,7 @@
       ]
     }
   ],
+  "rpfOverview": "RPF9 (magic 9FPR) encrypts its outer archive directory (TOC / path table), so raw carved resources do not come with outer folder paths. However, most payload blocks inside (ADAT Opus audio, KB2 Bink2 video, PS\\x00\\x09 RDNA2 shaders, CNavMesh tiles, RBF0/GFx UI, 0DRPz text, TXDs, XML configs, and meshlet geometry) sit in plain zlib or uncompressed streams.",
   "dxgiStats": [
     { "dxgi": 71, "name": "BC1_UNORM", "count": 174674, "pct": 48.913 },
     { "dxgi": 72, "name": "BC1_UNORM_SRGB", "count": 82177, "pct": 23.011 },
@@ -171,23 +172,142 @@
     { "name": "RAW Uncompressed", "code": "0x0", "chunks": 5, "gb": 0.00, "pct": 0.01, "decodable": true }
   ],
   "archives": [
-    { "name": "shaders.rpf", "size": "411.7 MB", "status": "100% Cracked", "findings": "PS\\x00\\x09 cache (274.16 MB raw): 21,522 AMD RDNA2 GFX10.3 shaders, 25,471 Gfx + 2,693 CS PSOs, 0x41 SGPR ABI, RT BVH64 & NGG Mesh -> HLSL/SPIR-V" },
-    { "name": "levels.rpf", "size": "76.16 GB", "status": "Indexed", "findings": "123,507 3D models (121,105 unique), 1,009 TXDs, 183,992 0DRPz pages" },
-    { "name": "57x *.ttpf (TTDB)", "size": "62.22 GB", "status": "100% Formats", "findings": "357,115 textures · 20/20 DXGI formats solved · 89.42% ZLIB decodable" },
-    { "name": "audio.rpf", "size": "28.54 GB", "status": "Parsed", "findings": "7,159+ ADAT Opus banks (1.6M streams) + full audio bank directory & configs" },
-    { "name": "story000.rpf", "size": "20.02 GB", "status": "Indexed", "findings": "63,861 ADAT banks, 264 Bink2 videos, 5,378 named resources / 100+ scene prefixes" },
-    { "name": "movies.rpf", "size": "8.83 GB", "status": "Cataloged", "findings": "276 Bink2 (KB2) streams (7.25 GB, up to 2560x1440)" },
-    { "name": "core_bvh4.rpf", "size": "8.30 GB", "status": "Audited", "findings": "253,002 BVH4 collision geometry resource pages" },
-    { "name": "navmeshes.rpf", "size": "6.71 GB", "status": "100% Mapped", "findings": "27,482 CNavMesh tiles, 9,595 path regions, 27,482 heightgrids -> Interactive Map" },
-    { "name": "packs.rpf", "size": "4.80 GB", "status": "Indexed", "findings": "19,500 3D models (8,051 unique), 4,606 0DRPz pages" },
-    { "name": "anim.rpf", "size": "4.41 GB", "status": "Indexed", "findings": "83,640 animation resources (2,525 named clip dictionaries)" },
-    { "name": "core_restofworld.rpf", "size": "1.30 GB", "status": "Decoded", "findings": "870 3D models, 145 TXDs (217 PNGs decoded), 11 1080p Bink2 streams" },
-    { "name": "shared_minigame000.rpf", "size": "810.6 MB", "status": "Decoded", "findings": "777 3D models, 638 ADAT banks, 18 TXDs (24 PNGs decoded)" },
-    { "name": "data.rpf", "size": "481.5 MB", "status": "100% Decoded", "findings": "13,459 0DRPz text tables (3.63M strings), 1,263 RBF0 -> XML, 87 GFx v42, 2,259 PSIN" },
-    { "name": "story000_restofworld.rpf", "size": "198.4 MB", "status": "Parsed", "findings": "260 RSC9 resources, 15 ADAT banks, 7 Bink2 streams, 13 XML configs" },
-    { "name": "textures.rpf", "size": "192.6 MB", "status": "100% Decoded", "findings": "1,354 TXDs · 3,373 textures decoded cleanly incl. BC6H HDR & RGBA16F (0 failures)" },
-    { "name": "story000_script.rpf + script.rpf", "size": "82.4 MB", "status": "Parsed", "findings": "3,689 zlib/PSIN script chunks indexed" },
-    { "name": "common.rpf + small packs", "size": "69.5 MB", "status": "100% Decoded", "findings": "275+ XML configs (tuning, timecycles, damage, combat, setup manifests)" }
+    {
+      "name": "audio.rpf",
+      "size": "28.54 GB",
+      "status": "Playable",
+      "what": "7,159+ ADAT (.awc) audio banks (~1.6M clips): SFX, ambience, engines, police scanner, speech, radio.",
+      "enc": "Audio frames are NOT encrypted (standard RFC 6716 Opus -> WAV). Outer RPF9 TOC paths are encrypted, and clip IDs inside ADAT banks are one-way 32-bit joaat hashes (same as GTA V / RDR2).",
+      "how": "Plaintext bank/radio/slot directories sit in early zlib chunks (0x007000, 0x036000, 0xb01000: Core.RadioStation.*, Core.Dispatch.*, WaveSlotsList, sounds_common, music_common). Hashing those + 0DRPz strings with joaat resolves clip names."
+    },
+    {
+      "name": "shaders.rpf",
+      "size": "411.7 MB",
+      "status": "100% Cracked",
+      "what": "Unified PS\\x00\\x09 precompiled Xbox Series X PSO cache (274.16 MB raw, drv 930.048.020): 25,471 Gfx PSOs, 2,693 Compute PSOs, 54,576 meta blobs, 21,522 shaders.",
+      "enc": "Zero DXBC/DXIL — offline-compiled to raw unencrypted AMD RDNA2 (GFX10.3) GPU ISA (1:1 match to Mesa RADV/ACO gfx1030).",
+      "how": "9,580 CS · 7,463 PS · 3,574 NGG/Mesh (exp prim) · 703 VS · 202 Hardware RT (image_bvh64_intersect_ray). 0x41 records map D3D12.X USER_DATA SGPR bindings; lifts to HLSL SM 6.6 & SPIR-V 1.5."
+    },
+    {
+      "name": "levels.rpf",
+      "size": "76.16 GB",
+      "status": "Indexed",
+      "what": "Main world geometry, buildings, roads, interiors, vehicles, props, and embedded TXDs — 123,507 3D models (121,105 unique), 1,009 TXDs, 183,992 0DRPz pages.",
+      "enc": "Outer RPF9 TOC encrypted; RSC9 meshlet headers and +0xA8 drawable name pointers are plaintext inside zlib streams.",
+      "how": "LOD0 geometry decodes cleanly from 24/24/16-bit quantized vertices + 7-bit packed meshlet indices + UV0 (type 0x28), with SW_4KB_D BC7/BC3/BC1 embedded textures."
+    },
+    {
+      "name": "57× *.ttpf (TTDB)",
+      "size": "62.22 GB",
+      "status": "100% Formats",
+      "what": "Streaming texture databases (RDS5 + ETPF) holding 357,115 total textures (151.57 GB virtual stream size).",
+      "enc": "Unencrypted. ETPF u1 bits (u1 >> 3) & 0x7F store exact DXGI_FORMAT (20/20 solved); RDS5 table (lo >> 26) & 0xF stores per-chunk codec.",
+      "how": "89.42% (134.77 GB) is plain ZLIB decodable via RDNA2 4KB/64KB deswizzle (8–128bpp); 10.57% (16.79 GB) uses Xbox hardware ASIC BCPack."
+    },
+    {
+      "name": "data.rpf",
+      "size": "481.5 MB",
+      "status": "100% Decoded",
+      "what": "13,459 0DRPz localization tables (3.63M strings, 11 locales), 1,263 RBF0 binary UI layouts (fwui), 87 Scaleform GFx v42 AS3 binaries, 2,259 PSIN files.",
+      "enc": "Outer TOC encrypted; all internal zlib streams, UTF-8 string pools, RBF0 XML trees, and GFx symbol tables are plaintext.",
+      "how": "0DRPz uses 0x60 UTF-8 pool + multi-chunk virtual continuation; RBF0 uses 4-byte 0xFB 0xFF 0x01 0x00 header before binary XML."
+    },
+    {
+      "name": "navmeshes.rpf",
+      "size": "6.71 GB",
+      "status": "100% Mapped",
+      "what": "27,482 CNavMesh tiles (0x00010015, 124.74M polys), 9,595 path regions, 27,482 heightgrids across 17.41 × 23.04 km.",
+      "enc": "Plaintext zlib tiles; world grid coordinates live directly in header (idx = gy * 512 + gx, 128m × 128m).",
+      "how": "44-byte TNavMeshPoly records carry exact land/water/road/pavement/interior flags and Z −79m..+404m."
+    },
+    {
+      "name": "packs.rpf",
+      "size": "4.80 GB",
+      "status": "Indexed",
+      "what": "Characters, heads, hair, clothing/accessories, and wildlife: 19,500 3D models (8,051 unique) + 4,606 0DRPz pages.",
+      "enc": "Plaintext RSC9 drawable/fragtype streams with rigid prefixes (cr[mbfraci]_ creatures, head_/hc_/cs_ peds, _mr1_/_fr1_/gmt_ clothing).",
+      "how": "Decodes identically to levels.rpf meshlets; ped collision capsules (*_bipedbounds_*, collision_*) filter cleanly."
+    },
+    {
+      "name": "story000.rpf",
+      "size": "20.02 GB",
+      "status": "Indexed",
+      "what": "Story/mission media: 63,861 ADAT Opus audio banks, 264 Bink2 (KB2) videos, 5,378 named resources across 100+ scene prefixes.",
+      "enc": "Outer TOC encrypted; ADAT Opus audio and KB2 video payloads are unencrypted and directly playable.",
+      "how": "Scene prefixes appear in plaintext inside carved resource headers and metadata."
+    },
+    {
+      "name": "movies.rpf",
+      "size": "8.83 GB",
+      "status": "Cataloged",
+      "what": "276 standalone Bink2 (KB2) streams (7.25 GB, up to 2560×1440; 558 total KB2 videos across build).",
+      "enc": "Unencrypted raw KB2* containers; only outer RPF9 filenames are hidden by TOC.",
+      "how": "Directly playable via RAD Bink2 (binkplay) or standard Bink2 decoders."
+    },
+    {
+      "name": "textures.rpf",
+      "size": "192.6 MB",
+      "status": "100% Decoded",
+      "what": "1,354 standalone TXDs containing 3,373 UI, HUD, HDR lighting, LUT, and material textures.",
+      "enc": "Unencrypted zlib TXD resources using standard Xbox Scarlett SW_4KB_D / 64KB tiling.",
+      "how": "3,373 / 3,373 decoded with 0 failures including +1,604 HDR BC6H & RGBA16F surfaces via Reinhard tonemapping."
+    },
+    {
+      "name": "core_bvh4.rpf",
+      "size": "8.30 GB",
+      "status": "Audited",
+      "what": "253,002 BVH4 spatial acceleration / collision geometry pages used by physics and raytracing.",
+      "enc": "Plain zlib RSC9 binary pages; outer TOC paths encrypted.",
+      "how": "Stores quantized 4-wide bounding volume hierarchies paired with world sector tiles."
+    },
+    {
+      "name": "anim.rpf",
+      "size": "4.41 GB",
+      "status": "Indexed",
+      "what": "83,640 animation resources including 2,525 named clip dictionaries (locomotion, vehicles, combat, wildlife).",
+      "enc": "Outer TOC encrypted; clip dictionary names and bone/track metadata sit in plaintext zlib RSC9 pages.",
+      "how": "Carvable by RSC9 zlib stream signatures with readable clip/dictionary names."
+    },
+    {
+      "name": "core_restofworld.rpf",
+      "size": "1.30 GB",
+      "status": "Decoded",
+      "what": "870 3D models (shared gore/body/cvar), 145 TXDs (217 PNGs decoded), 11 1080p Bink2 streams.",
+      "enc": "Plain zlib RSC9 models/TXDs and raw KB2 streams.",
+      "how": "Fully indexed & decodable using standard meshlet and Scarlett texture pipelines."
+    },
+    {
+      "name": "shared_minigame000.rpf",
+      "size": "810.6 MB",
+      "status": "Decoded",
+      "what": "777 3D models (minigame structures/props), 638 ADAT Opus audio banks, 18 TXDs (24 PNGs decoded).",
+      "enc": "Plain zlib RSC9 models/TXDs and unencrypted ADAT Opus banks.",
+      "how": "Fully indexed & playable/viewable."
+    },
+    {
+      "name": "story000_restofworld.rpf",
+      "size": "198.4 MB",
+      "status": "Parsed",
+      "what": "260 RSC9 resources, 15 ADAT Opus banks, 7 Bink2 streams, 13 XML configs.",
+      "enc": "Plain zlib/raw payloads; outer TOC encrypted.",
+      "how": "XML configs, ADAT audio, and KB2 streams extract cleanly."
+    },
+    {
+      "name": "script.rpf + story000_script.rpf",
+      "size": "82.4 MB",
+      "status": "Parsed",
+      "what": "3,689 zlib/PSIN compiled RAGE script and mission logic chunks.",
+      "enc": "Outer TOC encrypted; compressed chunks use standard RAGE script/PSIN container layouts.",
+      "how": "Indexed by chunk offset; full VM opcode mapping is an active research target."
+    },
+    {
+      "name": "common.rpf + small packs",
+      "size": "69.5 MB",
+      "status": "100% Decoded",
+      "what": "275+ plaintext XML/meta configs (tuning, timecycles, weather, damage, combat, setup manifests).",
+      "enc": "Plaintext XML inside standard zlib streams.",
+      "how": "Immediately readable & exportable as clean XML."
+    }
   ],
   "releases": [
     { "ver": "v1.3.0", "date": "2026-11-20", "title": "Native RDNA2 (GFX10.3) Shader Disassembler & HLSL/SPIR-V Lifter", "notes": "Cracked PS\\x00\\x09 PSO cache (21,522 shaders, 25,471 Gfx + 2,693 CS PSOs, 0x41 USER_DATA SGPR bindings). New Shaders (RDNA2) tab with GFX10.3 ASM, Lifted HLSL SM 6.6, SPIR-V 1.5 binary export, RT BVH64 & NGG Mesh tagging, plus --disasm-shaders CLI." },
