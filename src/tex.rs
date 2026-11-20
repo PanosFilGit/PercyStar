@@ -1090,8 +1090,43 @@ pub fn inspect_gfx(data: &[u8]) -> String {
     out
 }
 
-// =============================================================================
-// CNavMesh (ver 0x00010015) -> 3D Mesh Decoder for PercyStar 3D Viewport
+/// Extract clean readable UTF-8 strings from a GTA VI RAGE9 `0DRPz` localization/text table
+/// (or standalone null-terminated string pool chunk in `data.rpf`).
+pub fn decode_0drpz_text(data: &[u8]) -> Option<String> {
+    let start = if data.len() >= 0x60 && &data[0x10..0x15] == b"0DRPz" { 0x60 } else { 0 };
+    let end = if start == 0x60 {
+        let bmap = ru64(data, 8);
+        if (0x5000_0000..0x5800_0000).contains(&bmap) {
+            ((bmap - 0x5000_0000) as usize).clamp(start, data.len())
+        } else {
+            data.len()
+        }
+    } else {
+        data.len()
+    };
+    let mut lines = Vec::new();
+    for raw in data[start..end].split(|&b| b == 0) {
+        if raw.len() < 3 || raw.len() > 2000 { continue; }
+        let Ok(s) = std::str::from_utf8(raw) else { continue };
+        let s = s.trim();
+        if s.len() < 3 || s == "0DRPz" { continue; }
+        let printable = s.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\r' | '\t')).count();
+        let letters = s.chars().filter(|c| c.is_alphabetic()).count();
+        if printable * 100 / s.chars().count().max(1) >= 96 && letters >= 2 {
+            // Skip tiny binary hash-table noise
+            if s.len() <= 5 && s.chars().any(|c| !c.is_alphanumeric()) && !s.starts_with('~') {
+                continue;
+            }
+            lines.push(s.to_string());
+            if lines.len() >= 6000 { break; }
+        }
+    }
+    if lines.len() < 3 {
+        return None;
+    }
+    let header = format!("=== GTA VI RAGE9 Text Table ({} strings) ===\n\n", lines.len());
+    Some(header + &lines.join("\n"))
+}
 // =============================================================================
 
 pub fn decode_navmesh_from_rpf(rpf_path: &Path, file_off: u64, fallback_name: &str) -> Result<Mesh3D, String> {

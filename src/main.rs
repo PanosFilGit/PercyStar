@@ -6,8 +6,9 @@ use model3d::{
     is_vehicle_virtual, is_zlib_head, parse_obj, probe_large_rage9_model_in_buf, render_mesh3d_viewport,
 };
 use tex::{
-    DecodedTexture, build_dds_dx10, decode_navmesh_from_rpf, decode_rbf0, decode_ttpf_texture,
-    decode_txd_from_rpf, export_texture_png, inspect_gfx, probe_txd_header, scan_ttpf_descriptors,
+    DecodedTexture, build_dds_dx10, decode_0drpz_text, decode_navmesh_from_rpf, decode_rbf0,
+    decode_ttpf_texture, decode_txd_from_rpf, export_texture_png, inspect_gfx, probe_txd_header,
+    scan_ttpf_descriptors,
 };
 use eframe::egui::{self, Color32, ColorImage, CornerRadius, FontData, FontDefinitions, FontFamily, RichText, Stroke, TextureHandle, TextureOptions};
 use flate2::{Decompress, FlushDecompress, Status};
@@ -923,13 +924,19 @@ impl Rpf9App {
                         self.preview = decode_rbf0(&data).unwrap_or_else(|| format_hex(&data[..data.len().min(2048)]));
                     } else if e.kind == "GFX" {
                         self.preview = inspect_gfx(&data);
+                    } else if e.kind == "GXT" {
+                        self.preview = decode_0drpz_text(&data).unwrap_or_else(|| format_hex(&data[..data.len().min(2048)]));
                     } else if is_text {
                         self.preview = String::from_utf8_lossy(&data[..data.len().min(250_000)]).into_owned();
                     } else {
-                        if data.len() >= 24 && &data[16..21] == b"0DRPz" {
-                            self.mesh3d = extract_0drpz_mesh(&e.name, &data);
+                        if let Some(txt) = decode_0drpz_text(&data) {
+                            self.preview = txt;
+                        } else {
+                            if data.len() >= 24 && &data[16..21] == b"0DRPz" {
+                                self.mesh3d = extract_0drpz_mesh(&e.name, &data);
+                            }
+                            self.preview = format_hex(&data[..data.len().min(2048)]);
                         }
-                        self.preview = format_hex(&data[..data.len().min(2048)]);
                     }
                 }
                 Err(err) => self.preview = format!("Read error: {err}"),
@@ -967,7 +974,7 @@ impl Rpf9App {
                     "VEH" => 1,
                     "MODEL" => 2,
                     "TXD" | "TTPF" => 3,
-                    "RBF0" | "GFX" => 4,
+                    "RBF0" | "GFX" | "GXT" => 4,
                     "NAVM" => 5,
                     "BK2" => 6,
                     "AWC" => 7,
@@ -992,7 +999,7 @@ impl Rpf9App {
                     Category::Vehicles => e.kind == "VEH",
                     Category::Models => e.kind == "VEH" || (!self.vehicles_only && e.kind == "MODEL"),
                     Category::Textures => e.kind == "TXD" || e.kind == "TTPF",
-                    Category::Ui => e.kind == "RBF0" || e.kind == "GFX",
+                    Category::Ui => e.kind == "RBF0" || e.kind == "GFX" || e.kind == "GXT",
                     Category::NavMesh => e.kind == "NAVM",
                     Category::Videos => e.kind == "BK2",
                     Category::Audio => e.kind == "AWC",
@@ -1084,7 +1091,7 @@ fn app_data_dir() -> Option<PathBuf> {
 }
 
 fn cache_file_path() -> Option<PathBuf> {
-    app_data_dir().map(|d| d.join("scan_cache_v6.tsv"))
+    app_data_dir().map(|d| d.join("scan_cache_v7.tsv"))
 }
 
 fn load_last_folder() -> Option<PathBuf> {
@@ -1142,6 +1149,7 @@ fn load_disk_cache() -> HashMap<String, Vec<RpfEntry>> {
             "TTPF" => "TTPF",
             "RBF0" => "RBF0",
             "GFX" => "GFX",
+            "GXT" => "GXT",
             "NAVM" => "NAVM",
             "BK2" => "BK2",
             "AWC" => "AWC",
@@ -1295,6 +1303,7 @@ fn kind_color(kind: &str) -> Color32 {
         "TTPF" => Color32::from_rgb(48, 205, 255),
         "RBF0" => Color32::from_rgb(255, 145, 72),
         "GFX" => Color32::from_rgb(255, 115, 130),
+        "GXT" => Color32::from_rgb(255, 225, 95),
         "NAVM" => Color32::from_rgb(125, 235, 110),
         "XML" => Color32::from_rgb(72, 210, 255),
         "AWC" => Color32::from_rgb(90, 235, 165),
@@ -1388,7 +1397,7 @@ fn read_entry_bytes(e: &RpfEntry) -> std::io::Result<Vec<u8>> {
         f.seek(SeekFrom::Start(e.offset))?;
         let mut raw = vec![0u8; e.comp_size as usize];
         f.read_exact(&mut raw)?;
-        if matches!(e.kind, "XML" | "PSIN" | "RBF0" | "GFX" | "ZLIB") {
+        if matches!(e.kind, "XML" | "PSIN" | "RBF0" | "GFX" | "GXT" | "ZLIB") {
             let mut out = Vec::new();
             ZlibDecoder::new(&raw[..]).read_to_end(&mut out)?;
             Ok(out)
@@ -1740,6 +1749,8 @@ fn scan_single_rpf(path: &PathBuf, progress_state: Option<&Arc<Mutex<ScanState>>
                                 ("RBF0", format!("{z_idx:04}_ui.rbf"))
                             } else if stitch_head.starts_with(b"GFX") {
                                 ("GFX", format!("{z_idx:04}_scaleform.gfx"))
+                            } else if stitch_head.len() >= 24 && &stitch_head[16..21] == b"0DRPz" {
+                                ("GXT", format!("{z_idx:04}_text.gxt"))
                             } else if stitch_head.starts_with(b"PSIN") {
                                 ("PSIN", format!("{z_idx:04}_resource.psin"))
                             } else {
@@ -1888,7 +1899,7 @@ impl eframe::App for Rpf9App {
                 (Category::Vehicles, "Vehicles (.#ft)", c[1]),
                 (Category::Models, "3D Models (.#dr/.#ft)", c[2] + c[1]),
                 (Category::Textures, "Textures (.#td/.ttpf)", c[3]),
-                (Category::Ui, "UI (RBF0/GFX)", c[4]),
+                (Category::Ui, "UI & Text (RBF0/GFX/GXT)", c[4]),
                 (Category::NavMesh, "NavMesh (.ynv)", c[5]),
                 (Category::Videos, "Videos (.bk2)", c[6]),
                 (Category::Audio, "Audio (.awc)", c[7]),
@@ -2477,12 +2488,69 @@ fn export_models_cli(rpf_path: &PathBuf, out_dir: &PathBuf, filter: &str, vehicl
     eprintln!("DONE: Exported {ok}/{} models to {}", list.len(), out_dir.display());
 }
 
+fn dump_textures_cli(src_path: &PathBuf, out_dir: &PathBuf, limit: usize) {
+    let _ = fs::create_dir_all(out_dir);
+    let is_ttpf = src_path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("ttpf")).unwrap_or(false);
+    let (mut ok, mut bcpk, mut fail) = (0usize, 0usize, 0usize);
+    if is_ttpf {
+        let ix = match tex::ttpf_index(src_path) {
+            Ok(i) => i,
+            Err(e) => { eprintln!("TTPF index error: {e}"); return; }
+        };
+        let n = if limit == 0 { ix.descs.len() } else { limit.min(ix.descs.len()) };
+        eprintln!("Dumping up to {n}/{} textures from {}...", ix.descs.len(), src_path.display());
+        for d in ix.descs.iter().take(n) {
+            match decode_ttpf_texture(src_path, d.idx) {
+                Ok(tx) => {
+                    if export_texture_png(&tx, &out_dir.join(format!("{}.png", tx.name))).is_ok() {
+                        ok += 1;
+                    }
+                }
+                Err(e) if e.contains("BCPack") => bcpk += 1,
+                Err(_) => fail += 1,
+            }
+            if (ok + bcpk + fail) % 250 == 0 {
+                eprintln!("  progress: ok={ok} bcpack={bcpk} fail={fail}");
+            }
+        }
+    } else {
+        let entries = match scan_single_rpf(src_path, None) {
+            Ok((_, e)) => e,
+            Err(err) => { eprintln!("Scan failed: {err}"); return; }
+        };
+        let txds: Vec<&RpfEntry> = entries.iter().filter(|e| e.kind == "TXD").collect();
+        eprintln!("Found {} TXDs in {} -> dumping PNGs...", txds.len(), src_path.display());
+        let mut seen = std::collections::HashSet::new();
+        'outer: for e in txds {
+            match decode_txd_from_rpf(src_path, e.offset) {
+                Ok(vec_t) => {
+                    for tx in &vec_t {
+                        let safe: String = tx.name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') { c } else { '_' }).collect();
+                        let fname = if seen.insert(safe.clone()) { format!("{safe}.png") } else { format!("{safe}_{:x}.png", e.offset) };
+                        if export_texture_png(tx, &out_dir.join(fname)).is_ok() {
+                            ok += 1;
+                            if limit > 0 && ok >= limit { break 'outer; }
+                        }
+                    }
+                }
+                Err(_) => fail += 1,
+            }
+        }
+    }
+    eprintln!("DONE: Exported {ok} PNGs (bcpack={bcpk}, fail={fail}) to {}", out_dir.display());
+}
+
 fn main() -> eframe::Result<()> {
     // remove leftover old exe from previous self update
     if let Ok(cur) = std::env::current_exe() {
         let _ = fs::remove_file(cur.with_extension("exe.old"));
     }
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 4 && args[1] == "--dump-textures" {
+        let lim = args.get(4).and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+        dump_textures_cli(&PathBuf::from(&args[2]), &PathBuf::from(&args[3]), lim);
+        return Ok(());
+    }
     if args.len() >= 4 && args[1] == "--extract-vehicles" {
         export_models_cli(&PathBuf::from(&args[2]), &PathBuf::from(&args[3]), "", true);
         return Ok(());
