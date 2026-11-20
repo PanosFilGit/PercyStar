@@ -23,16 +23,29 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.webp" alt="PercyStar Neon Sunset UI, Search & 3D Meshlet Viewer Demo" width="900" />
+  <img src="assets/demo_overview.webp" alt="PercyStar 30fps Showcase — Neon Sunset UI, Search, Vehicles Filter & In-App Updater" width="920" />
 </p>
 
 ---
 
-## Screenshots
+## Visual Showcase
 
+### RAGE 9 3D Meshlet Viewer (`Textured/Mat` · `Clay Solid` · `Solid+Wire` · `Wire`)
 <p align="center">
-  <img src="assets/preview.png" alt="PercyStar 3D Meshlet Viewer — Neon Sunset Theme" width="860" />
+  <img src="assets/demo_3d.webp" alt="PercyStar 3D Meshlet Viewer — Shading Modes & Smooth Orbit" width="900" />
 </p>
+
+### Pure-Rust Audio (`ADAT` Opus → WAV), `PSIN` Metadata & XML Inspector
+<p align="center">
+  <img src="assets/demo_inspector.webp" alt="PercyStar Pure-Rust Opus Audio, PSIN PSO Inspector & XML Viewer" width="900" />
+</p>
+
+<details>
+<summary>Static High-Res Screenshot (Neon Sunset v1.0.3)</summary>
+<p align="center">
+  <img src="assets/preview.png" alt="PercyStar 3D Meshlet Viewer — Neon Sunset Theme" width="900" />
+</p>
+</details>
 
 ---
 
@@ -65,9 +78,12 @@ PercyStar/
 ├── assets/
 │   ├── logo.png            # App & window icon
 │   ├── logo.ico            # Windows executable icon
-│   ├── demo.webp           # 60fps animated UI & 3D meshlet viewer demo
-│   └── preview.png         # Neon Sunset 3D viewer screenshot
+│   ├── demo_overview.webp  # 30fps Neon Sunset UI, search & updater showcase
+│   ├── demo_3d.webp        # 30fps 3D meshlet viewer shading modes showcase
+│   ├── demo_inspector.webp # 30fps XML / PSIN / ADAT Opus audio showcase
+│   └── preview.png         # High-res Neon Sunset screenshot
 ├── scripts/
+│   ├── build_macos.sh      # Universal macOS (.app / .zip) build helper
 │   ├── setup_deps.ps1      # Optional RAD Video Tools (binkplay.exe) setup
 │   ├── awc_extract.py      # Standalone CLI ADAT (.awc) Opus -> .wav helper
 │   └── rpf9_carve.py       # Standalone CLI RPF9 carver
