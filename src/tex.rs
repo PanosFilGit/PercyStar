@@ -211,6 +211,20 @@ pub fn decode_linear_to_rgba(lin: &[u8], w: usize, h: usize, dxgi: u8) -> Option
         };
         res.ok()?;
         let mut pixels = Vec::with_capacity(w * h);
+        if matches!(dxgi, 80 | 81 | 83 | 84) {
+            for px in out_u32 {
+                let r = ((px >> 16) & 0xFF) as u8;
+                let g = ((px >> 8) & 0xFF) as u8;
+                pixels.push(if dxgi <= 81 {
+                    Color32::from_gray(r)
+                } else {
+                    let (nx, ny) = (r as f32 / 127.5 - 1.0, g as f32 / 127.5 - 1.0);
+                    let nz = (1.0 - nx * nx - ny * ny).max(0.0).sqrt();
+                    Color32::from_rgb(r, g, ((nz * 0.5 + 0.5) * 255.0) as u8)
+                });
+            }
+            return Some(pixels);
+        }
         for px in out_u32 {
             // texture2ddecoder packs u32 as 0xAARRGGBB (BGRA little-endian)
             let b = (px & 0xFF) as u8;
@@ -601,152 +615,128 @@ pub fn scan_ttpf_descriptors(path: &Path) -> Result<(String, Vec<TtpfTexMeta>), 
     Ok((info, out))
 }
 
-fn etpf_fmt_to_dxgi(fmt_byte: u8) -> (u8, usize) {
-    match fmt_byte {
-        0x10 | 0x11 | 0x19 => (98, 16), // BC7
-        0x20 | 0x21 => (77, 16),        // BC3
-        0x38 | 0x39 | 0x68 | 0x69 => (71, 8), // BC1
-        0x40 => (80, 8),                // BC4
-        0x50 => (83, 16),               // BC5
-        _ => (98, 16),
-    }
+fn etpf_fmt_to_dxgi(fmt_byte: u8) -> Option<(u8, usize)> {
+    // bits 3..7 = format id (pairs are UNORM/SRGB variants), bits 0..2 = flags.
+    // Verified by brute-force layout search on ui / vehicles / graphics / lighting ttpfs.
+    // Covers ~98.5% of all 357k ttpf textures; ids 1, 22, 28 are still unidentified.
+    Some(match fmt_byte >> 3 {
+        2 | 3 => (98, 16),   // BC7
+        7 | 8 => (71, 8),    // BC1
+        13 | 14 => (77, 16), // BC3
+        16 => (80, 8),       // BC4
+        19 | 20 => (83, 16), // BC5 (normal maps)
+        31 => (95, 16),      // BC6H (HDR lighting)
+        _ => return None,
+    })
 }
 
-/// Decode a single texture by descriptor index from a `.ttpf` archive.
-pub fn decode_ttpf_texture(path: &Path, tex_idx: usize) -> Result<DecodedTexture, String> {
-    let (_, descs) = scan_ttpf_descriptors(path)?;
-    let d = descs.get(tex_idx).ok_or("Texture index out of range")?;
+/// Exact virtual layout of every RDS5 chunk, straight from the chunk table (no inflating needed).
+/// Entry i encodes chunk i's virtual END as (hi & 0xFFFFF) * 16KB + (lo >> 30) * 4KB;
+/// chunk i starts where chunk i-1 ends (chunk 0 at 0). Verified: every ETPF texture offset in
+/// ttdb_ui / vehicles / peds / weapon_liveries lands exactly on a chunk boundary.
+pub struct TtpfIndex {
+    pub descs: Vec<TtpfTexMeta>,
+    /// (file_start, file_end, virt_start, virt_len)
+    chunks: Vec<(u64, u64, u64, u64)>,
+}
 
+static TTPF_INDEX: std::sync::OnceLock<std::sync::Mutex<HashMap<std::path::PathBuf, std::sync::Arc<TtpfIndex>>>> = std::sync::OnceLock::new();
+
+pub fn ttpf_index(path: &Path) -> Result<std::sync::Arc<TtpfIndex>, String> {
+    let map = TTPF_INDEX.get_or_init(Default::default);
+    if let Some(ix) = map.lock().unwrap().get(path) {
+        return Ok(ix.clone());
+    }
+    let (_, descs) = scan_ttpf_descriptors(path)?;
     let mut f = File::open(path).map_err(|e| e.to_string())?;
     let mut hdr = [0u8; 24];
     f.read_exact(&mut hdr).map_err(|e| e.to_string())?;
     let n_chunks = ru32(&hdr, 4) as usize;
-    let hdr_pages = ru32(&hdr, 16) as u64;
-    let etpf_off = hdr_pages * 0x100;
-
+    let etpf_off = ru32(&hdr, 16) as u64 * 0x100;
     let mut tbl = vec![0u8; n_chunks * 8];
     f.read_exact(&mut tbl).map_err(|e| e.to_string())?;
 
-    let (mut dxgi, mut bpe) = etpf_fmt_to_dxgi(d.fmt_byte);
+    let mut chunks = Vec::with_capacity(n_chunks);
+    let (mut prev_c, mut vstart) = (etpf_off, 0u64);
+    for i in 0..n_chunks {
+        let lo = ru32(&tbl, i * 8);
+        let hi = ru32(&tbl, i * 8 + 4);
+        let cend = (lo & 0x03FF_FFFF) as u64 * 0x100;
+        let r = (lo >> 30) as u64;
+        let vend = (hi & 0x000F_FFFF) as u64 * 0x4000 + r * 0x1000;
+        if cend > prev_c && vend > vstart {
+            chunks.push((prev_c, cend, vstart, vend - vstart));
+            vstart = vend;
+        }
+        prev_c = cend;
+    }
+    let ix = std::sync::Arc::new(TtpfIndex { descs, chunks });
+    map.lock().unwrap().insert(path.to_path_buf(), ix.clone());
+    Ok(ix)
+}
+
+/// Read `len` bytes of the RDS5 virtual stream starting at `off`, inflating only overlapping chunks.
+pub fn ttpf_read_virtual(path: &Path, ix: &TtpfIndex, off: u64, len: usize) -> Result<Vec<u8>, String> {
+    let end = off + len as u64;
+    let mut f = File::open(path).map_err(|e| e.to_string())?;
+    let mut out_buf = vec![0u8; len];
+    let mut covered = 0usize;
+    let mut dec = Decompress::new(true);
+    let first = ix.chunks.partition_point(|c| c.2 + c.3 <= off);
+    for &(cs, ce, vs, vl) in &ix.chunks[first..] {
+        if vs >= end { break; }
+        let mut ch = vec![0u8; (ce - cs) as usize];
+        f.seek(SeekFrom::Start(cs)).map_err(|e| e.to_string())?;
+        f.read_exact(&mut ch).map_err(|e| e.to_string())?;
+        let data = if is_zlib_head(&ch) {
+            let mut out = Vec::with_capacity(vl as usize);
+            dec.reset(true);
+            let _ = dec.decompress_vec(&ch, &mut out, FlushDecompress::Finish); // partial output is still usable
+            out
+        } else if ch.len() as u64 == vl {
+            ch
+        } else {
+            return Err("Texture uses Xbox Series X hardware BCPack compression (not decodable yet)".into());
+        };
+        let s0 = vs.max(off);
+        let s1 = (vs + data.len() as u64).min(end);
+        if s1 > s0 {
+            out_buf[(s0 - off) as usize..(s1 - off) as usize].copy_from_slice(&data[(s0 - vs) as usize..(s1 - vs) as usize]);
+            covered += (s1 - s0) as usize;
+        }
+    }
+    if covered == 0 {
+        return Err("Texture data not found in zlib chunks (likely BCPack)".into());
+    }
+    Ok(out_buf)
+}
+
+/// Decode a single texture by descriptor index from a `.ttpf` archive.
+pub fn decode_ttpf_texture(path: &Path, tex_idx: usize) -> Result<DecodedTexture, String> {
+    let ix = ttpf_index(path)?;
+    let d = ix.descs.get(tex_idx).ok_or("Texture index out of range")?;
+
+    let (dxgi, bpe) = etpf_fmt_to_dxgi(d.fmt_byte).ok_or_else(|| format!("Unsupported TTPF texture format 0x{:02x} (not identified yet)", d.fmt_byte))?;
     let bw = ((d.w + 3) / 4).max(1);
     let bh = ((d.h + 3) / 4).max(1);
-    let sz16 = (bw * bh * 16) as u64;
-    let sz8 = (bw * bh * 8) as u64;
-    if d.alloc_sz >= sz8 && d.alloc_sz < sz16 {
-        dxgi = 71;
-        bpe = 8;
-    }
     let mip0_lin = bw * bh * bpe;
-    let use_64k = mip0_lin >= 65536;
+    // Mipmapped textures use 4KB tiles at every size; mip-less ones use 64KB tiles once over 64KB.
+    let use_64k = !d.has_mips && mip0_lin > 65536;
     let mip0_padded = if use_64k {
         let (tw, th) = if bpe == 16 { (64, 64) } else { (128, 64) };
         ((bw + tw - 1) / tw) * tw * ((bh + th - 1) / th) * th * bpe
     } else {
         padded_4kb_size(d.w, d.h, true, bpe)
     };
-    let mip0_off = if d.has_mips && d.alloc_sz > mip0_padded as u64 && d.alloc_sz <= (mip0_padded as f64 * 1.65) as u64 {
+    // mips are stored smallest-first, so mip0 sits at the END of the allocation (the mip flag
+    // byte is not reliable: 0 still has a chain on vehicle textures)
+    let mip0_off = if d.alloc_sz > mip0_padded as u64 && d.alloc_sz <= (mip0_padded as f64 * 1.65) as u64 {
         d.byte_off + (d.alloc_sz - mip0_padded as u64)
     } else {
         d.byte_off
     };
-    let target_end = mip0_off + mip0_padded as u64;
 
-    // Walk RDS5 chunks tracking exact virtual offset, decompressing only overlapping chunks!
-    let mut prev_c = etpf_off;
-    let mut prev_h = 0u64;
-    let mut vpos = 0u64;
-    let mut raw_tex = vec![0u8; mip0_padded];
-    let mut covered = 0usize;
-    let mut dec = Decompress::new(true);
-
-    for i in 0..n_chunks {
-        let lo = ru32(&tbl, i * 8);
-        let hi = ru32(&tbl, i * 8 + 4);
-        let cend = ((lo & 0x03FF_FFFF) as u64) * 0x100;
-        let hi16k = ((hi & 0x000F_FFFF) as u64) * 0x4000;
-        let cstart = prev_c;
-        let h_delta = hi16k.saturating_sub(prev_h);
-        prev_c = cend;
-        prev_h = hi16k;
-        if vpos >= target_end { break; }
-        if cend <= cstart { continue; }
-
-        let csize = (cend - cstart) as usize;
-        // Quick peek if before target window: still need exact dec_len for sub-16KB zlib chunks
-        f.seek(SeekFrom::Start(cstart)).map_err(|e| e.to_string())?;
-        let mut head4 = [0u8; 4];
-        let _ = f.read(&mut head4);
-        let is_z = is_zlib_head(&head4);
-        let is_raw_hdr = i == 0 || (h_delta > 0 && (csize as u64) >= h_delta && ((csize as u64) - h_delta) < 0x4000);
-
-        // Estimate chunk virtual span before reading full bytes if well below mip0_off
-        if !is_z && !is_raw_hdr {
-            // Xbox Series X hardware BCPack chunk
-            let adv = h_delta.max(0x1000);
-            if vpos + adv > mip0_off && vpos < target_end {
-                return Err("Texture uses Xbox Series X hardware BCPack compression (not zlib)".into());
-            }
-            vpos += adv;
-            continue;
-        }
-
-        if is_raw_hdr {
-            let adv = csize as u64;
-            if vpos + adv > mip0_off && vpos < target_end {
-                let mut ch = vec![0u8; csize];
-                f.seek(SeekFrom::Start(cstart)).map_err(|e| e.to_string())?;
-                f.read_exact(&mut ch).map_err(|e| e.to_string())?;
-                let s0 = vpos.max(mip0_off);
-                let s1 = (vpos + adv).min(target_end);
-                raw_tex[(s0 - mip0_off) as usize..(s1 - mip0_off) as usize]
-                    .copy_from_slice(&ch[(s0 - vpos) as usize..(s1 - vpos) as usize]);
-                covered += (s1 - s0) as usize;
-            }
-            vpos += adv;
-            continue;
-        }
-
-        // Zlib chunk: if h_delta >= 0x4000 and completely before mip0_off, check if we still need exact length (only if h_delta == 0!)
-        if h_delta > 0 && vpos + h_delta + 0x4000 <= mip0_off {
-            vpos += h_delta;
-            continue;
-        }
-
-        let mut ch = vec![0u8; csize];
-        f.seek(SeekFrom::Start(cstart)).map_err(|e| e.to_string())?;
-        f.read_exact(&mut ch).map_err(|e| e.to_string())?;
-        dec.reset(true);
-        let mut out = Vec::with_capacity((h_delta as usize).max(65536));
-        let mut tmp = [0u8; 65536];
-        let mut ppos = 0usize;
-        loop {
-            let bi = dec.total_in();
-            let bo = dec.total_out();
-            let Ok(st) = dec.decompress(&ch[ppos..], &mut tmp, FlushDecompress::None) else { break };
-            let cin = (dec.total_in() - bi) as usize;
-            let cout = (dec.total_out() - bo) as usize;
-            ppos += cin;
-            if cout > 0 { out.extend_from_slice(&tmp[..cout]); }
-            if st == Status::StreamEnd || (cin == 0 && cout == 0) { break; }
-        }
-        let adv = out.len() as u64;
-        if adv == 0 {
-            vpos += h_delta.max(0x1000);
-            continue;
-        }
-        if vpos + adv > mip0_off && vpos < target_end {
-            let s0 = vpos.max(mip0_off);
-            let s1 = (vpos + adv).min(target_end);
-            raw_tex[(s0 - mip0_off) as usize..(s1 - mip0_off) as usize]
-                .copy_from_slice(&out[(s0 - vpos) as usize..(s1 - vpos) as usize]);
-            covered += (s1 - s0) as usize;
-        }
-        vpos += adv;
-    }
-
-    if covered == 0 {
-        return Err("Texture data not found in zlib chunks (likely BCPack)".into());
-    }
+    let raw_tex = ttpf_read_virtual(path, &ix, mip0_off, mip0_padded)?;
     let lin = if use_64k {
         deswizzle_64kb_ttpf(&raw_tex, d.w, d.h, bpe)
     } else {

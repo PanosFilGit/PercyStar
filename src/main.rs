@@ -1932,13 +1932,18 @@ impl eframe::App for Rpf9App {
             self.refresh_view();
             ui.label(RichText::new(format!("{} results", self.view.len())).size(11.0).color(Color32::from_rgb(110, 118, 134)));
             let mut clicked = None;
-            egui::ScrollArea::vertical().show_rows(ui, 24.0, self.view.len(), |ui, range| {
+            // Rows MUST be exactly ROW_H tall or show_rows miscomputes the total height (blank space / jumpy scroll)
+            const ROW_H: f32 = 20.0;
+            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, ROW_H, self.view.len(), |ui, range| {
                 let rows: Vec<(usize, RpfEntry)> = {
                     let st = self.state.lock().unwrap();
                     self.view[range].iter().filter_map(|&i| st.entries.get(i).map(|e| (i, e.clone()))).collect()
                 };
                 for (idx, e) in &rows {
-                    ui.horizontal(|ui| {
+                    let w = ui.available_width();
+                    ui.allocate_ui_with_layout(egui::vec2(w, ROW_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_height(ROW_H);
                         ui.label(RichText::new(format!("{:<4}", e.kind)).strong().size(11.5).color(kind_color(e.kind)));
                         let sz_s = format_size(e.raw_size);
                         let label = if self.is_folder {
@@ -2226,13 +2231,129 @@ mod tests {
         assert!(dump.contains("com.rockstargames.gtav.HudMap"));
     }
 
+    /// Writes sample PNGs from a big .ttpf so decode quality can be eyeballed:
+    /// PERCY_TTPF=<file> PERCY_OUT=<dir> cargo test --release dump_ttpf_samples -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn dump_ttpf_samples() {
+        let (Ok(src), Ok(out)) = (std::env::var("PERCY_TTPF"), std::env::var("PERCY_OUT")) else { return };
+        let src = PathBuf::from(src);
+        let t = Instant::now();
+        let ix = tex::ttpf_index(&src).expect("index");
+        eprintln!("index: {} textures in {:.1}s", ix.descs.len(), t.elapsed().as_secs_f32());
+        let _ = fs::create_dir_all(&out);
+        let (mut ok, mut bcpack, mut fail) = (0, 0, 0);
+        let step = (ix.descs.len() / 60).max(1);
+        for d in ix.descs.iter().step_by(step) {
+            let t1 = Instant::now();
+            match decode_ttpf_texture(&src, d.idx) {
+                Ok(tx) => {
+                    ok += 1;
+                    let _ = export_texture_png(&tx, &Path::new(&out).join(format!("{}.png", tx.name)));
+                    if ok <= 5 { eprintln!("  {} in {} ms", tx.name, t1.elapsed().as_millis()); }
+                }
+                Err(e) if e.contains("BCPack") => bcpack += 1,
+                Err(e) => { fail += 1; eprintln!("  #{} fail: {e}", d.idx); }
+            }
+        }
+        eprintln!("ok={ok} bcpack={bcpack} fail={fail}");
+        // raw virtual dumps (whole allocation) for offline layout analysis
+        if let Ok(ids) = std::env::var("PERCY_RAW") {
+            for id in ids.split(',').filter_map(|x| x.parse::<usize>().ok()) {
+                let d = &ix.descs[id];
+                if let Ok(raw) = tex::ttpf_read_virtual(&src, &ix, d.byte_off, d.alloc_sz as usize) {
+                    let nm = format!("raw_{}_{}x{}_f{:02x}_m{}_a{}.bin", id, d.w, d.h, d.fmt_byte, d.has_mips as u8, d.alloc_sz);
+                    let _ = fs::write(Path::new(&out).join(nm), raw);
+                }
+            }
+        }
+    }
+
+    /// PERCY_RPF=<textures.rpf> PERCY_OUT=<dir>: dump every TXD texture as PNG
+    #[test]
+    #[ignore]
+    fn dump_txd_samples() {
+        let (Ok(src), Ok(out)) = (std::env::var("PERCY_RPF"), std::env::var("PERCY_OUT")) else { return };
+        let src = PathBuf::from(src);
+        let _ = fs::create_dir_all(&out);
+        let t = Instant::now();
+        let (_, entries) = scan_single_rpf(&src, None).unwrap();
+        let txds: Vec<_> = entries.iter().filter(|e| e.kind == "TXD").collect();
+        eprintln!("{} TXD in {:.1}s", txds.len(), t.elapsed().as_secs_f32());
+        let (mut ok, mut fail) = (0, 0);
+        for e in txds.iter().take(40) {
+            let t1 = Instant::now();
+            match decode_txd_from_rpf(&src, e.offset) {
+                Ok(v) => for (k, tx) in v.iter().enumerate().take(3) {
+                    ok += 1;
+                    let _ = export_texture_png(tx, &Path::new(&out).join(format!("{}_{k}_{}.png", e.offset, tx.name.replace(|c: char| !c.is_ascii_alphanumeric() && c != '_', "_"))));
+                    if ok < 4 { eprintln!("  {} {}x{} {} in {} ms", tx.name, tx.w, tx.h, tx.fmt_name, t1.elapsed().as_millis()); }
+                },
+                Err(er) => { fail += 1; eprintln!("  fail {}: {er}", e.name); }
+            }
+        }
+        eprintln!("ok={ok} fail={fail}");
+    }
+
+    /// Brute-force layout finder: PERCY_TTPF, PERCY_OUT, PERCY_IDS=1,2,3
+    #[test]
+    #[ignore]
+    fn ttpf_layout_search() {
+        let (Ok(src), Ok(out), Ok(ids)) = (std::env::var("PERCY_TTPF"), std::env::var("PERCY_OUT"), std::env::var("PERCY_IDS")) else { return };
+        let src = PathBuf::from(src);
+        let ix = tex::ttpf_index(&src).unwrap();
+        let _ = fs::create_dir_all(&out);
+        for id in ids.split(',').filter_map(|x| x.parse::<usize>().ok()) {
+            let d = &ix.descs[id];
+            let Ok(raw) = tex::ttpf_read_virtual(&src, &ix, d.byte_off, d.alloc_sz as usize) else { eprintln!("{id}: bcpack"); continue };
+            let mut res = Vec::new();
+            for (dxgi, bpe, is_bc) in [(98u8, 16usize, true), (71, 8, true), (77, 16, true), (80, 8, true), (83, 16, true), (95, 16, true), (28, 4, false), (61, 1, false), (49, 2, false)] {
+                let (bw, bh) = if is_bc { ((d.w + 3) / 4, (d.h + 3) / 4) } else { (d.w, d.h) };
+                for t64 in [false, true] {
+                    if t64 && !is_bc { continue; }
+                    let pad = if t64 {
+                        let (tw, th) = if bpe == 16 { (64, 64) } else { (128, 64) };
+                        ((bw + tw - 1) / tw) * tw * ((bh + th - 1) / th) * th * bpe
+                    } else { tex::padded_4kb_size(d.w, d.h, is_bc, bpe) };
+                    let mut offs = vec![0usize];
+                    if raw.len() > pad { offs.push(raw.len() - pad); }
+                    let mut o = 0x1000; while o + pad <= raw.len() && offs.len() < 40 { offs.push(o); o += 0x1000; }
+                    offs.sort(); offs.dedup();
+                    for off in offs {
+                        if off + pad > raw.len() && off != 0 { continue; }
+                        let sl = &raw[off..raw.len().min(off + pad)];
+                        let lin = if t64 { tex::deswizzle_64kb_ttpf(sl, d.w, d.h, bpe) } else { tex::deswizzle_4kb_d(sl, d.w, d.h, is_bc, bpe) };
+                        let Some(px) = tex::decode_linear_to_rgba(&lin, d.w, d.h, dxgi) else { continue };
+                        let mut diff = 0u64;
+                        for y in 0..d.h { for x in 1..d.w {
+                            let (a, b) = (px[y * d.w + x - 1], px[y * d.w + x]);
+                            diff += (a.r() as i32 - b.r() as i32).unsigned_abs() as u64 + (a.g() as i32 - b.g() as i32).unsigned_abs() as u64;
+                        }}
+                        for y in 1..d.h { for x in 0..d.w {
+                            let (a, b) = (px[(y - 1) * d.w + x], px[y * d.w + x]);
+                            diff += (a.r() as i32 - b.r() as i32).unsigned_abs() as u64 + (a.g() as i32 - b.g() as i32).unsigned_abs() as u64;
+                        }}
+                        res.push((diff as f64 / (d.w * d.h) as f64, dxgi, t64, off, px));
+                    }
+                }
+            }
+            res.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            eprintln!("tex {id} {}x{} f{:02x} mips={} alloc={:#x}", d.w, d.h, d.fmt_byte, d.has_mips, d.alloc_sz);
+            for (k, (sc, dx, t64, off, px)) in res.iter().take(4).enumerate() {
+                eprintln!("   score {sc:.1} dxgi {dx} t64 {t64} off {off:#x}");
+                let t = tex::DecodedTexture { name: String::new(), w: d.w, h: d.h, mips: 1, dxgi: *dx, fmt_name: "", pixels: px.clone(), raw_dds_payload: vec![] };
+                let _ = export_texture_png(&t, &Path::new(&out).join(format!("{id}_{k}.png")));
+            }
+        }
+    }
+
     #[test]
     fn real_gta6_archives_smoke_test() {
         let base = Path::new(r"D:\Grand Theft Auto VI Build");
         if !base.exists() { return; }
 
         // 1. TTPF native scan + decode
-        let ttpf = base.join("platform.ttpf");
+        let ttpf = base.join("data").join("ttdb").join("ui").join("platform.ttpf");
         if ttpf.exists() {
             let (info, descs) = scan_ttpf_descriptors(&ttpf).expect("scan platform.ttpf");
             assert!(!descs.is_empty(), "platform.ttpf descriptors empty: {info}");
