@@ -1091,7 +1091,7 @@ fn app_data_dir() -> Option<PathBuf> {
 }
 
 fn cache_file_path() -> Option<PathBuf> {
-    app_data_dir().map(|d| d.join("scan_cache_v7.tsv"))
+    app_data_dir().map(|d| d.join("scan_cache_v8.tsv"))
 }
 
 fn load_last_folder() -> Option<PathBuf> {
@@ -1749,8 +1749,8 @@ fn scan_single_rpf(path: &PathBuf, progress_state: Option<&Arc<Mutex<ScanState>>
                                 ("RBF0", format!("{z_idx:04}_ui.rbf"))
                             } else if stitch_head.starts_with(b"GFX") {
                                 ("GFX", format!("{z_idx:04}_scaleform.gfx"))
-                            } else if stitch_head.len() >= 24 && &stitch_head[16..21] == b"0DRPz" {
-                                ("GXT", format!("{z_idx:04}_text.gxt"))
+                            } else if let Some(slug) = tex::probe_gxt_snippet(&stitch_head) {
+                                ("GXT", format!("{z_idx:04}_{slug}.gxt"))
                             } else if stitch_head.starts_with(b"PSIN") {
                                 ("PSIN", format!("{z_idx:04}_resource.psin"))
                             } else {

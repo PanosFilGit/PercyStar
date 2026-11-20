@@ -1090,6 +1090,36 @@ pub fn inspect_gfx(data: &[u8]) -> String {
     out
 }
 
+/// Fast snippet extractor for naming `0DRPz` / standalone GTA VI text chunks in the archive list
+/// so users can Ctrl+F radio artists, weapons, vehicles, or dialogue directly in PercyStar.
+pub fn probe_gxt_snippet(head: &[u8]) -> Option<String> {
+    let is_0drpz = head.len() >= 24 && &head[16..21] == b"0DRPz";
+    let start = if is_0drpz { 0x60.min(head.len()) } else { 0 };
+    let mut good = Vec::new();
+    for raw in head[start..].split(|&b| b == 0) {
+        if raw.len() < 4 || raw.len() > 160 { continue; }
+        let Ok(s) = std::str::from_utf8(raw) else { continue };
+        let s = s.trim();
+        if s.len() < 4 || s == "0DRPz" { continue; }
+        let ok_chars = s.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '\'' | '.' | '!' | '?' | ',')).count();
+        let letters = s.chars().filter(|c| c.is_ascii_alphabetic()).count();
+        if ok_chars * 100 / s.chars().count().max(1) >= 92 && letters >= 3 {
+            good.push(s);
+            if good.len() >= 2 { break; }
+        }
+    }
+    if is_0drpz || good.len() >= 2 {
+        let slug: String = good.first().copied().unwrap_or("text")
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .take(32)
+            .collect();
+        let slug = slug.trim_matches('_');
+        return Some(if slug.is_empty() { "text".into() } else { slug.into() });
+    }
+    None
+}
+
 /// Extract clean readable UTF-8 strings from a GTA VI RAGE9 `0DRPz` localization/text table
 /// (or standalone null-terminated string pool chunk in `data.rpf`).
 pub fn decode_0drpz_text(data: &[u8]) -> Option<String> {
