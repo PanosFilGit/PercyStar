@@ -5,21 +5,24 @@
 <h1 align="center">PercyStar</h1>
 
 <p align="center">
-  <strong>Zero-dependency native Rust RPF9 (<code>9FPR</code>) explorer, RAGE 9 3D meshlet viewer, pure-Rust <code>ADAT</code> Opus audio decoder, and docked D3D11 Bink2 player</strong>
+  <strong>Zero-dependency native Rust RPF9 (<code>9FPR</code>) &amp; TTPF (<code>RDS5</code>/<code>ETPF</code>) explorer — dedicated 10-category RAGE 9 3D Model Viewer, 100% Xbox Scarlett RDNA2 texture decoder (all 20 DXGI formats), native <code>0DRPz</code>/<code>RBF0</code>/<code>GFx</code> UI &amp; text decoders, <code>CNavMesh</code> 3D viewer, pure-Rust <code>ADAT</code> Opus audio, and docked D3D11 Bink2 player</strong>
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/Version-v1.2.0-FFA81C?style=flat-square" alt="Version" />
   <img src="https://img.shields.io/badge/Rust-1.85%2B-orange?style=flat-square&logo=rust" alt="Rust" />
+  <img src="https://img.shields.io/badge/Textures-100%25%20DXGI%20%2B%20RDNA2%204KB%2F64KB-48D2FF?style=flat-square" alt="Textures" />
+  <img src="https://img.shields.io/badge/3D-Model%20Viewer%20(10%20Categories)-FF55AF?style=flat-square" alt="3D" />
   <img src="https://img.shields.io/badge/Audio-Pure%20Rust%20Opus%20(Zero%20FFmpeg)-90EBA5?style=flat-square" alt="Audio" />
-  <img src="https://img.shields.io/badge/3D-RAGE9%20Meshlets%20%2B%20UVs-FF55AF?style=flat-square" alt="3D" />
   <img src="https://img.shields.io/badge/Platform-Windows%20x64-0078D6?style=flat-square" alt="Windows" />
   <img src="https://img.shields.io/badge/Platform-macOS%20(Universal)-111111?style=flat-square&logo=apple" alt="macOS" />
   <img src="https://img.shields.io/badge/License-Source--Available%20(No%20Modifications)-red?style=flat-square" alt="License" />
 </p>
 
 <p align="center">
-  <strong>On Mac? <a href="https://github.com/rpatty-dev/PercyStar/releases/download/v1.0.3/PercyStar_macOS.zip">Download PercyStar for macOS here</a></strong><br />
-  <sub>Universal app (Apple Silicon + Intel), macOS 11+. Unzip, then right-click <code>PercyStar.app</code> &gt; Open the first time (the app is not notarized).</sub>
+  <strong>Latest Release: <a href="https://github.com/rpatty-dev/PercyStar/releases/latest">Download PercyStar v1.2.0 (Win64 + In-App Auto-Updater)</a></strong> · <strong><a href="https://github.com/rpatty-dev/PercyStar/releases/download/v1.0.3/PercyStar_macOS.zip">macOS Universal Build</a></strong><br />
+  <strong>Live Research &amp; Breakthroughs Dashboard: <a href="https://percystar-breakthroughs.vercel.app">percystar-breakthroughs.vercel.app</a></strong> · <strong><a href="https://mapnavmeshsite.vercel.app">Interactive NavMesh World Map</a></strong><br />
+  <sub>Windows users on v1.0.3+ can click the golden <b>★ Update Available</b> pill inside PercyStar for 1-click self-update.</sub>
 </p>
 
 <p align="center">
@@ -58,24 +61,35 @@
 
 ---
 
-## Features
+## Features & Format Breakthroughs (v1.2.0)
 
-- **100% Native Runtime Dependencies for Audio, 3D, XML, and PSO**
-  - **No Python, no FFmpeg, no external DLLs required** — `ADAT` (`.awc`) Opus streams are decoded natively inside `PercyStar.exe` using pure-Rust `rusty-opus` (RFC 6716), and `.#dr`/`.#ft`/`.#dd` 3D models are decoded and rasterized natively in Rust.
-  - All Rust crate dependencies are pinned in [`Cargo.lock`](Cargo.lock).
-- **Native RAGE 9 3D Model Viewer (`.#dr`, `.#ft`, `.#dd`, `.obj`)**
-  - Direct click-to-view decoding of unencrypted RAGE 9 virtual (`0x50xxxxxx`) + physical (`0x60xxxxxx`) meshlet resources straight out of `.rpf` archives.
-  - Clean **LOD0-only** extraction (`Lod0 -> grmModel -> grmGeometry`), 24/24/16-bit quantized vertices, 7-bit packed meshlet triangles + `u16` remap table, and **UV0** (`type 0x28`).
-  - Zero-alloc **Z-buffered software rasterizer** (`Textured/Mat`, `Clay Solid`, `Solid+Wire`, `Wire`, `Spin`), embedded `BC1`/`BC3` TXD decoding, custom `.png`/`.bmp` texture loading, and full `.OBJ` export (`v` + `vt` + `f v/vt`).
-  - Dedicated **`Vehicles Only`** toggle in the 3D Models tab + sequential fast-indexing of vehicle archives.
-- **Whole-Folder & Single-RPF Scanning**
-  - Indexes across worker threads, streams results live, and caches to `%LOCALAPPDATA%\PercyStar\scan_cache_v4.tsv`.
+- **Dedicated 3D Model Viewer Tab (`Explorer | Model Viewer`)**
+  - Full-screen 3D workspace built for instant 60 FPS browsing across **144,000+ RAGE 9 3D models**.
+  - **10 Smart Auto-Categories** with live counts: **All Models**, **Vehicles**, **Air & Sea**, **Weapons**, **Characters**, **Clothing**, **Animals**, **Props & Items**, **World / Map**, and **NavMesh 3D**.
+  - **Hide LODs** toggle (filters `_lod`/`_slod`/`_mid`), `◀ Prev` / `Next ▶` / `Random` buttons, `Up`/`Down` arrow-key browsing, **5 Camera Presets** (`3/4`, `Front`, `Side`, `Back`, `Top`), and **1-Click Catalog CSV Import** (`Import CSV...` / auto-detected local catalogs) + `.OBJ` loader.
+- **100% Xbox Series X (Scarlett / RDNA2) Texture Engine (`.#td` & `.ttpf`)**
+  - **100.00% TTPF Format Identification (357,115 / 357,115 textures):** Solved ETPF descriptor `u1` bits 3..9 (`(u1 >> 3) & 0x7F` = exact Microsoft `DXGI_FORMAT` enum) — zero unknown texture formats.
+  - **All 20+ DXGI Formats Decoded Natively in Pure Rust:** `BC1`–`BC7`, `BC6H_UF16`/`SF16` HDR, `R16G16B16A16_FLOAT`/`UNORM`, `R16_FLOAT`/`UNORM`, `R16G16_FLOAT`, `R32_FLOAT`, `R10G10B10A2_UNORM`, `R8G8B8A8`, `B8G8R8A8`, `R8_UNORM`, `A8_UNORM` (`texture2ddecoder` + IEEE-754 half-float Reinhard tonemapping).
+  - **Verified RDNA2 4KB (`SW_4KB_D`) & 64KB Deswizzle for All 5 Bit Depths (8 / 16 / 32 / 64 / 128bpp):** Plus reverse-mip `mip0` tail addressing, instant `O(log N)` RDS5 chunk seeking, exact RDS5 chunk codec decoding (`0=RAW`, `1..7=HW BCPack BC1..BC7`, `8=ZLIB`), interactive zoom viewer, multi-texture strip, and **Export PNG / Export DDS (DX10)**.
+- **Expanded RAGE 9 3D Meshlet Decoder (`.#dr`, `.#ft`, `.#dd`, `.obj`)**
+  - Direct click-to-view decoding of unencrypted RAGE 9 virtual (`0x50xxxxxx`) + physical (`0x60xxxxxx`) meshlet resources straight out of `.rpf` archives, including `+0xA8` drawable name resolution and non-zero page header support (**38× more models discovered**).
+  - Clean **LOD0-only** extraction (`Lod0 -> grmModel -> grmGeometry`), 24/24/16-bit quantized vertices, 7-bit packed meshlet triangles + `u16` remap table, **UV0** (`type 0x28`), upgraded embedded `SW_4KB_D` BC7/BC3/BC1 textures, custom `.png`/`.bmp` texture loading, and full `.OBJ` export (`v` + `vt` + `f v/vt`).
+- **Native UI, Localization & NavMesh Decoders (`RBF0`, `GFX`, `0DRPz`, `CNavMesh`)**
+  - **`0DRPz` Text / GXT Viewer:** Decodes multi-chunk RAGE 9 UTF-8 localization tables & standalone string pools under **UI & Text (`RBF0/GFX/GXT`)** with searchable preview-slug filenames.
+  - **`RBF0` (`fwui`) → XML:** Handles the 4-byte `0xFB 0xFF 0x01 0x00` header to decode binary UI resources cleanly into XML (with `.xml` export).
+  - **Scaleform GFx v42 (AS3) Inspector:** Dumps ActionScript 3 classes, packages, and symbol references.
+  - **`CNavMesh` (`0x00010015`) 3D Viewer:** Detects navigation tiles with world grid coordinates (`nav_{gx}_{gy}_(x,y).ynv`), triangulates polygons colored by surface type (land/water/road/pavement/interior), and exports `.OBJ`.
+- **100% Native Runtime Dependencies for Audio, 3D, Textures, UI, XML & PSO**
+  - **No Python, no FFmpeg, no external DLLs required** — `ADAT` (`.awc`) Opus streams decode natively via pure-Rust `rusty-opus` (RFC 6716). All crates pinned in [`Cargo.lock`](Cargo.lock).
+- **Whole-Folder & Single-Archive Scanning (`.rpf` & `.ttpf`)**
+  - Multi-threaded live scanning cached to `%LOCALAPPDATA%\PercyStar\scan_cache_v8.tsv`.
 - **Docked D3D11 Bink2 Video Player (Optional `binkplay.exe`)**
-  - Docks RAD `binkplay.exe` (`/NoBorder /DrawD3D11 /L`) directly into the inspector pane. Run [`scripts/setup_deps.ps1`](scripts/setup_deps.ps1) if you don't already have RAD Video Tools installed.
-- **CLI Batch Model Export**
+  - Docks RAD `binkplay.exe` (`/NoBorder /DrawD3D11 /L`) directly into the inspector pane. Run [`scripts/setup_deps.ps1`](scripts/setup_deps.ps1) if needed.
+- **CLI Batch Exporters (Models & Textures)**
   ```powershell
   PercyStar.exe --extract-vehicles "<path-to-levels.rpf>" "<output-dir>"
   PercyStar.exe --extract-models "<path-to-archive.rpf>" "<output-dir>" "filter1,filter2"
+  PercyStar.exe --dump-textures "<path-to-archive.rpf|.ttpf>" "<output-dir>" [limit]
   ```
 
 ---
@@ -100,8 +114,9 @@ PercyStar/
 │   ├── awc_extract.py      # Standalone CLI ADAT (.awc) Opus -> .wav helper
 │   └── rpf9_carve.py       # Standalone CLI RPF9 carver
 ├── src/
-│   ├── main.rs             # PercyStar egui application & RPF9 scanner
+│   ├── main.rs             # PercyStar egui app, Model Viewer tab, RPF9/TTPF scanner & CLI
 │   ├── model3d.rs          # RAGE 9 meshlet decoder, UV/TXD parser & Z-buffer renderer
+│   ├── tex.rs              # Xbox Scarlett RDNA2 4KB/64KB textures, TTPF, RBF0, GFx, 0DRPz & CNavMesh
 │   └── awc.rs              # Pure-Rust ADAT (.awc) Opus -> .wav decoder
 ├── app.rc / build.rs       # Win32 icon resource
 ├── Cargo.toml / Cargo.lock # All Rust crate dependencies pinned cleanly
