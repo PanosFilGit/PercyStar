@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/demo.gif" alt="PercyStar Neon Sunset UI, Search & 3D Meshlet Viewer Demo" width="900" />
+  <img src="assets/demo.webp" alt="PercyStar Neon Sunset UI, Search & 3D Meshlet Viewer Demo" width="900" />
 </p>
 
 ---
@@ -65,7 +65,7 @@ PercyStar/
 ├── assets/
 │   ├── logo.png            # App & window icon
 │   ├── logo.ico            # Windows executable icon
-│   ├── demo.gif            # Animated UI & 3D meshlet viewer demo
+│   ├── demo.webp           # 60fps animated UI & 3D meshlet viewer demo
 │   └── preview.png         # Neon Sunset 3D viewer screenshot
 ├── scripts/
 │   ├── setup_deps.ps1      # Optional RAD Video Tools (binkplay.exe) setup
