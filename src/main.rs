@@ -18,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPO_RELEASES_URL: &str = "https://github.com/rpatty-dev/PercyStar/releases";
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // threshold in levels rpf where vehicle fragtypes begin
@@ -215,10 +216,14 @@ fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
 }
 
 fn silent_cmd(prog: &str) -> Command {
-    let mut c = Command::new(prog);
     #[cfg(windows)]
-    c.creation_flags(CREATE_NO_WINDOW);
-    c
+    {
+        let mut c = Command::new(prog);
+        c.creation_flags(CREATE_NO_WINDOW);
+        c
+    }
+    #[cfg(not(windows))]
+    Command::new(prog)
 }
 
 // checks github latest release redirect without api rate limits
@@ -229,8 +234,9 @@ fn spawn_update_check(upd: Arc<Mutex<UpdateState>>, ctx: egui::Context) {
         g.checking = true;
     }
     std::thread::spawn(move || {
-        let out = silent_cmd("curl.exe")
-            .args(["-fsSL", "-o", "NUL", "-w", "%{url_effective}", &format!("{REPO_RELEASES_URL}/latest")])
+        let (curl, null) = if cfg!(windows) { ("curl.exe", "NUL") } else { ("curl", "/dev/null") };
+        let out = silent_cmd(curl)
+            .args(["-fsSL", "-o", null, "-w", "%{url_effective}", &format!("{REPO_RELEASES_URL}/latest")])
             .output();
         let mut found = None;
         if let Ok(res) = out {
@@ -1748,11 +1754,16 @@ impl eframe::App for Rpf9App {
                                 RichText::new(if upd_inst { "Updating..." } else { "Download & Install" }).strong().color(Color32::BLACK),
                             )
                             .fill(Color32::from_rgb(255, 168, 28));
-                            if ui.add_enabled(!upd_inst, btn).clicked() {
+                            // releases ship a Win64 zip only; other platforms just get "View Release"
+                            if cfg!(windows) && ui.add_enabled(!upd_inst, btn).clicked() {
                                 spawn_install_update(new_ver.clone(), Arc::clone(&self.update), ctx.clone());
                             }
                             if ui.button("View Release").clicked() {
-                                let _ = silent_cmd("cmd").args(["/C", "start", "", rel_url]).spawn();
+                                let _ = if cfg!(windows) {
+                                    silent_cmd("cmd").args(["/C", "start", "", rel_url]).spawn()
+                                } else {
+                                    Command::new("open").arg(rel_url).spawn()
+                                };
                             }
                             if ui.add_enabled(!upd_inst, egui::Button::new("Later")).clicked() {
                                 self.update.lock().unwrap().show_modal = false;
